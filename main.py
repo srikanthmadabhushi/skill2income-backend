@@ -10,7 +10,7 @@ app = FastAPI()
 # ✅ CORS FIX (VERY IMPORTANT)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # allow all (safe for now)
+    allow_origins=["*"],  # You can restrict later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -19,42 +19,42 @@ app.add_middleware(
 # OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# Request model
 class UserInput(BaseModel):
     skills: str
     interests: str
     time: str
 
+
 @app.get("/")
 def home():
     return {"message": "Skill2Income API Running 🚀"}
+
 
 @app.post("/generate-income-plan")
 def generate_income_plan(data: UserInput):
     try:
         prompt = f"""
-        Generate 3 UNIQUE income ideas.
+Generate 3 UNIQUE income ideas based on:
 
-        Skills: {data.skills}
-        Interests: {data.interests}
-        Time Available: {data.time}
+Skills: {data.skills}
+Interests: {data.interests}
+Time Available: {data.time}
 
-        Rules:
-        - Ideas must be specific to the skill
-        - Do NOT repeat generic ideas
-        - Make them practical and realistic
+Return ONLY valid JSON in this format:
 
-        Return ONLY JSON:
-
-        [
-          {{
-            "title": "Idea title",
-            "description": "Short description",
-            "steps": ["Step 1", "Step 2"],
-            "earnings": "$20-$100 per hour",
-            "monthly_estimate": "$500-$2000"
-          }}
-        ]
-        """
+[
+  {{
+    "title": "Idea title",
+    "description": "Short description",
+    "steps": ["Step 1", "Step 2", "Step 3"],
+    "earnings": "$20-$100 per hour",
+    "monthly_estimate": "$500-$2000",
+    "difficulty": "Beginner/Intermediate/Advanced",
+    "recommended": true
+  }}
+]
+"""
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
