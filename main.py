@@ -1,165 +1,58 @@
-<<<<<<< HEAD
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
-import os
 import json
+import os
 
-# Initialize FastAPI app
 app = FastAPI()
 
-# Enable CORS (important for frontend)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # You can restrict later
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# OpenAI Client (uses environment variable)
+# Initialize OpenAI
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Request model
 class UserInput(BaseModel):
     skills: str
     interests: str
     time: str
 
-# Health check API
 @app.get("/")
 def home():
-    return {"message": "Skill2Income API Running"}
+    return {"message": "Skill2Income API Running 🚀"}
 
-# Main API
 @app.post("/generate-income-plan")
-def generate_income_plan(user_input: UserInput):
+def generate_income_plan(data: UserInput):
     try:
         prompt = f"""
-        You are an expert career and business advisor.
+        Generate 3 income ideas based on:
+        Skills: {data.skills}
+        Interests: {data.interests}
+        Time Available: {data.time}
 
-        Based on the following user details:
-        Skills: {user_input.skills}
-        Interests: {user_input.interests}
-        Time Available: {user_input.time}
-
-        Generate exactly 3 income ideas.
-
-        Return ONLY JSON (no explanation), in this format:
+        Return ONLY valid JSON in this format:
 
         [
-            {{
-                "title": "Idea Title",
-                "description": "Short explanation",
-                "steps": ["Step 1", "Step 2", "Step 3"],
-                "earnings": "$500-$2000/month",
-                "difficulty": "Beginner/Intermediate/Advanced",
-                "recommended": true
-            }}
+          {{
+            "title": "...",
+            "description": "...",
+            "steps": ["...", "..."],
+            "earnings": "...",
+            "monthly_estimate": "...",
+            "difficulty": "...",
+            "recommended": true
+          }}
         ]
         """
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a helpful AI assistant."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7
+            messages=[{"role": "user", "content": prompt}]
         )
 
-        response_text = response.choices[0].message.content.strip()
+        result_text = response.choices[0].message.content.strip()
 
-        # 🔥 IMPORTANT FIX: Convert string → JSON
-        try:
-            parsed_result = json.loads(response_text)
-            return {"result": parsed_result}
-        except Exception:
-            return {
-                "error": "Failed to parse AI response",
-                "raw": response_text
-            }
+        # ✅ Convert string → JSON
+        result_json = json.loads(result_text)
+
+        return {"result": result_json}
 
     except Exception as e:
         return {"error": str(e)}
-=======
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from openai import OpenAI
-
-app = FastAPI()
-
-# ✅ Allow frontend requests
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ✅ Replace with your API key
-import os
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-# Request model
-class UserInput(BaseModel):
-    skills: str
-    interests: str
-    time: str
-
-
-@app.get("/")
-def home():
-    return {"message": "Skill2Income API Running"}
-
-
-@app.post("/generate-income-plan")
-def generate_plan(user: UserInput):
-
-    prompt = f"""
-Return ONLY valid JSON. No explanation.
-
-Return EXACTLY 3 ideas.
-
-Format:
-[
-  {{
-    "title": "string",
-    "description": "string",
-    "steps": ["step1", "step2", "step3"],
-    "earnings": "string",
-    "monthly_estimate": "string",
-    "difficulty": "Beginner / Intermediate / Advanced",
-    "recommended": true/false
-  }}
-]
-
-Rules:
-- Only ONE idea should have "recommended": true
-
-User:
-Skills: {user.skills}
-Interests: {user.interests}
-Time: {user.time}
-"""
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You return ONLY clean JSON."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.7
-    )
-
-    result = response.choices[0].message.content.strip()
-
-    # Clean markdown if AI adds it
-    if result.startswith("```"):
-        result = result.replace("```json", "").replace("```", "").strip()
-
-    return {"result": result}
->>>>>>> e896b63f51ee470a07bfb93ab0e84fa71e9c8c20
