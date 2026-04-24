@@ -1,10 +1,4 @@
-<<<<<<< HEAD
 fastapi
 uvicorn
 openai
-=======
-fastapi
-uvicorn
-openai
->>>>>>> e896b63f51ee470a07bfb93ab0e84fa71e9c8c20
-pydantic
+python-dotenv
