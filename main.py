@@ -1,12 +1,22 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-import json
-import os
+from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
+import os
+import json
 
 app = FastAPI()
 
-# Initialize OpenAI client
+# ✅ CORS FIX (VERY IMPORTANT)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # TEMP: allow all (we can restrict later)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class UserInput(BaseModel):
@@ -14,36 +24,34 @@ class UserInput(BaseModel):
     interests: str
     time: str
 
-
 @app.get("/")
 def home():
     return {"message": "Skill2Income API Running 🚀"}
-
 
 @app.post("/generate-income-plan")
 def generate_income_plan(data: UserInput):
     try:
         prompt = f"""
-Generate 3 income ideas based on:
+        Generate 3 income ideas based on:
 
-Skills: {data.skills}
-Interests: {data.interests}
-Time Available: {data.time}
+        Skills: {data.skills}
+        Interests: {data.interests}
+        Time Available: {data.time}
 
-Return ONLY valid JSON like this:
+        Return ONLY valid JSON like this:
 
-[
-  {{
-    "title": "Idea title",
-    "description": "Short description",
-    "steps": ["Step 1", "Step 2"],
-    "earnings": "$20-$100 per hour",
-    "monthly_estimate": "$500-$2000",
-    "difficulty": "Beginner/Intermediate/Advanced",
-    "recommended": true
-  }}
-]
-"""
+        [
+          {{
+            "title": "Idea title",
+            "description": "Short description",
+            "steps": ["Step 1", "Step 2"],
+            "earnings": "$20-$100 per hour",
+            "monthly_estimate": "$500-$2000",
+            "difficulty": "Beginner/Intermediate/Advanced",
+            "recommended": true
+          }}
+        ]
+        """
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -53,7 +61,7 @@ Return ONLY valid JSON like this:
 
         result_text = response.choices[0].message.content.strip()
 
-        # Clean markdown if any
+        # Clean response
         result_text = result_text.replace("```json", "").replace("```", "").strip()
 
         result_json = json.loads(result_text)
