@@ -10,7 +10,7 @@ app = FastAPI()
 # ✅ CORS FIX (VERY IMPORTANT)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # TEMP: allow all (we can restrict later)
+    allow_origins=["*"],  # allow all (safe for now)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -32,13 +32,18 @@ def home():
 def generate_income_plan(data: UserInput):
     try:
         prompt = f"""
-        Generate 3 income ideas based on:
+        Generate 3 UNIQUE income ideas.
 
         Skills: {data.skills}
         Interests: {data.interests}
         Time Available: {data.time}
 
-        Return ONLY valid JSON like this:
+        Rules:
+        - Ideas must be specific to the skill
+        - Do NOT repeat generic ideas
+        - Make them practical and realistic
+
+        Return ONLY JSON:
 
         [
           {{
@@ -46,9 +51,7 @@ def generate_income_plan(data: UserInput):
             "description": "Short description",
             "steps": ["Step 1", "Step 2"],
             "earnings": "$20-$100 per hour",
-            "monthly_estimate": "$500-$2000",
-            "difficulty": "Beginner/Intermediate/Advanced",
-            "recommended": true
+            "monthly_estimate": "$500-$2000"
           }}
         ]
         """
