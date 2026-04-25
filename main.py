@@ -6,6 +6,7 @@ import json
 
 app = FastAPI()
 
+# ✅ CORS (no change)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,30 +18,43 @@ app.add_middleware(
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
+# =========================
+# 🔧 HELPER FUNCTIONS
+# =========================
+
 def ensure_fields(idea: dict) -> dict:
-    """Guarantee all fields exist with non-empty values."""
+    """Ensure all required fields exist (safe fallback)."""
     defaults = {
         "title": "Income Idea",
         "who_is_this_for": "Beginners looking to start earning online",
-        "description": "A practical way to generate income using your skills.",
-        "why_it_works": "Strong demand and scalable execution.",
+        "description": "A practical way to generate income.",
+        "why_it_works": "Growing demand.",
         "tools_needed": ["Fiverr", "Upwork"],
-        "steps": ["Identify a niche", "Create a simple offering", "Start outreach"],
+        "steps": ["Start small", "Validate idea"],
         "time_to_start": "1–3 days",
-        "earnings": "$20–$50 per hour",
+        "earnings": "$20–$50",
         "monthly_estimate": "$500–$2000",
         "difficulty": "Beginner",
-        "pro_tip": "Start with a niche and validate quickly."
+        "pro_tip": "Stay consistent",
+
+        # 🔥 NEW DECISION ENGINE FIELDS
+        "score": 70,
+        "risk_level": "Medium",
+        "best_option": False,
+        "reason_for_best": "Balanced option",
+        "timeline": "Start → Learn → Earn within 30 days",
+        "what_if": "If you invest more time, results grow faster"
     }
 
     for k, v in defaults.items():
         if not idea.get(k) or idea.get(k) in ["-", ""]:
             idea[k] = v
+
     return idea
 
 
 def make_unique(ideas: list) -> list:
-    """Ensure ideas are not duplicates by tweaking titles if needed."""
+    """Avoid duplicate titles."""
     seen = set()
     for i, idea in enumerate(ideas):
         title = idea.get("title", "").lower()
@@ -50,68 +64,99 @@ def make_unique(ideas: list) -> list:
     return ideas
 
 
+def normalize_score(score):
+    """Ensure score is between 0–100."""
+    try:
+        score = int(score)
+        return max(0, min(score, 100))
+    except:
+        return 70
+
+
+def fix_best_option(ideas):
+    """Ensure ONLY ONE best_option = True."""
+    best_found = False
+
+    for idea in ideas:
+        if idea.get("best_option") and not best_found:
+            best_found = True
+        else:
+            idea["best_option"] = False
+
+    # If none marked → pick highest score
+    if not best_found and ideas:
+        best = max(ideas, key=lambda x: x.get("score", 0))
+        best["best_option"] = True
+
+    return ideas
+
+
+# =========================
+# 🚀 MAIN API
+# =========================
+
 @app.post("/generate-income-plan")
 async def generate_income_plan(data: dict):
     try:
-        history = data.get("history", [])
+        skills = data.get("skills")
+        interests = data.get("interests")
+        time = data.get("time")
 
-        messages = []
+        # ✅ FIXED PROMPT (CRITICAL)
+        messages = [
+            {
+                "role": "system",
+                "content": "You are an AI income decision engine that generates realistic, personalized, and actionable income strategies."
+            },
+            {
+                "role": "user",
+                "content": f"""
+User Profile:
+Skills: {skills}
+Interests: {interests}
+Time available: {time}
 
-        # 🧠 memory
-        for h in history:
-            messages.append({
-                "role": h["role"],
-                "content": h["text"]
-            })
+Generate EXACTLY 3 DIFFERENT income ideas.
 
-        # 🔥 STRONG PROMPT (forces uniqueness + specifics)
-        messages.append({
-            "role": "user",
-            "content": f"""
-You are a senior business strategist.
+For EACH idea return JSON with:
 
-Generate EXACTLY 3 completely DIFFERENT income ideas.
+- title
+- who_is_this_for
+- description
+- why_it_works
+- tools_needed (array)
+- steps (array)
+- time_to_start
+- earnings
+- monthly_estimate
+- difficulty
 
-User:
-Skills: {data.get("skills")}
-Interests: {data.get("interests")}
-Time Available: {data.get("time")}
+NEW FIELDS:
+- score (0–100)
+- risk_level (Low / Medium / High)
+- best_option (true/false)
+- reason_for_best
+- timeline
+- what_if
 
-STRICT RULES:
-- Each idea MUST target a DIFFERENT audience
-- Each idea MUST use DIFFERENT tools/platforms
-- Each idea MUST be a DIFFERENT type of income (freelance / content / product / etc.)
-- NO generic phrases like "general audience"
-- NO repetition
-- ALL fields must be filled
-
-Return ONLY valid JSON:
-
-[
-  {{
-    "title": "...",
-    "who_is_this_for": "... specific audience",
-    "description": "...",
-    "why_it_works": "... specific reason",
-    "tools_needed": ["tool1","tool2"],
-    "steps": ["step1","step2","step3"],
-    "time_to_start": "...",
-    "earnings": "...",
-    "monthly_estimate": "...",
-    "difficulty": "...",
-    "pro_tip": "..."
-  }}
-]
+Rules:
+- Only ONE idea must have best_option = true
+- All ideas must be different
+- Make results realistic and practical
+- Return ONLY JSON array (no text, no explanation)
 """
-        })
+            }
+        ]
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
-            temperature=1.1,  # 🔥 encourages diversity
+            temperature=0.7
         )
 
         result_text = response.choices[0].message.content.strip()
+
+        # Clean markdown if any
         result_text = result_text.replace("```json", "").replace("```", "").strip()
 
         try:
@@ -119,13 +164,15 @@ Return ONLY valid JSON:
         except:
             return {"error": "Invalid JSON from AI", "raw": result_text}
 
-        # 🔥 CLEAN + FIX
+        # ✅ CLEAN + VALIDATE
         cleaned = []
         for idea in ideas:
             idea = ensure_fields(idea)
+            idea["score"] = normalize_score(idea.get("score", 70))
             cleaned.append(idea)
 
         cleaned = make_unique(cleaned)
+        cleaned = fix_best_option(cleaned)
 
         return {"result": cleaned}
 
