@@ -92,6 +92,130 @@ def build_history_summary(history, limit=6):
     return "\n".join(trimmed[-limit:])
 
 
+STOPWORDS = {
+    "the", "and", "for", "with", "that", "this", "from", "into", "your", "have", "will",
+    "about", "what", "when", "where", "which", "their", "there", "then", "them", "been",
+    "want", "need", "like", "than", "just", "only", "also", "into", "over", "under", "more",
+    "less", "very", "once", "each", "such", "able", "could", "would", "should", "using",
+    "used", "user", "users", "idea", "project"
+}
+
+
+def keyword_tokens(value):
+    return [token for token in normalize_text(value).split() if len(token) > 2 and token not in STOPWORDS]
+
+
+def chunk_text(text, chunk_size=110, overlap=20):
+    words = str(text or "").split()
+    if not words:
+        return []
+    if len(words) <= chunk_size:
+        return [" ".join(words)]
+
+    chunks = []
+    start = 0
+    while start < len(words):
+        end = min(len(words), start + chunk_size)
+        chunks.append(" ".join(words[start:end]))
+        if end >= len(words):
+            break
+        start = max(end - overlap, start + 1)
+    return chunks
+
+
+def retrieve_knowledge_context(query, knowledge_items, limit=4):
+    query_tokens = set(keyword_tokens(query))
+    if not query_tokens:
+        return {"context_text": "", "citations": []}
+
+    scored = []
+    for item in knowledge_items or []:
+        title = item.get("title", "")
+        source = item.get("source", "")
+        content = item.get("content", "")
+        for idx, chunk in enumerate(chunk_text(content)):
+            chunk_tokens = set(keyword_tokens(f"{title} {source} {chunk}"))
+            overlap = len(query_tokens & chunk_tokens)
+            if overlap <= 0:
+                continue
+            score = overlap * 3
+            if any(token in normalize_text(title) for token in query_tokens):
+                score += 2
+            scored.append({
+                "score": score,
+                "title": title or f"Note {idx + 1}",
+                "source": source,
+                "chunk": chunk
+            })
+
+    ranked = sorted(scored, key=lambda item: item["score"], reverse=True)[:limit]
+    if not ranked:
+        return {"context_text": "", "citations": []}
+
+    context_lines = []
+    citations = []
+    for idx, item in enumerate(ranked, start=1):
+        label = item["title"]
+        if item["source"]:
+            label = f"{label} ({item['source']})"
+        citations.append(label)
+        context_lines.append(f"[{idx}] {label}: {item['chunk']}")
+
+    return {
+        "context_text": "\n".join(context_lines),
+        "citations": citations
+    }
+
+
+def strip_code_fences(text):
+    return str(text or "").replace("```json", "").replace("```", "").strip()
+
+
+def extract_json_payload(text):
+    cleaned = strip_code_fences(text)
+    if not cleaned:
+        return None
+
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+
+    for opener, closer in [("{", "}"), ("[", "]")]:
+        start = cleaned.find(opener)
+        end = cleaned.rfind(closer)
+        if start != -1 and end != -1 and end > start:
+            snippet = cleaned[start:end + 1]
+            try:
+                return json.loads(snippet)
+            except Exception:
+                continue
+
+    return None
+
+
+def structured_json_completion(system_prompt, user_prompt, fallback, expected_type="dict", temperature=0.8, max_tokens=1000, attempts=2):
+    for _ in range(max(1, attempts)):
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=temperature,
+            max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        )
+
+        parsed = extract_json_payload(response.choices[0].message.content.strip())
+
+        if expected_type == "list" and isinstance(parsed, list):
+            return parsed
+        if expected_type == "dict" and isinstance(parsed, dict):
+            return parsed
+
+    return fallback
+
+
 def infer_focus(skills, history):
     cleaned_skills = (skills or "").strip()
     if cleaned_skills and not is_plan_request(cleaned_skills):
@@ -278,24 +402,15 @@ STRICT:
 
 Return JSON ARRAY.
 """
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
+    return structured_json_completion(
+        system_prompt="Generate high-quality startup ideas in valid JSON.",
+        user_prompt=prompt,
+        fallback=[],
+        expected_type="list",
         temperature=1.0,
         max_tokens=1400,
-        messages=[
-            {"role": "system", "content": "Generate high-quality startup ideas."},
-            {"role": "user", "content": prompt}
-        ]
+        attempts=2
     )
-
-    txt = response.choices[0].message.content.strip()
-    txt = txt.replace("```json","").replace("```","")
-
-    try:
-        return json.loads(txt)
-    except:
-        return []
 
 
 def generate_plan(focus, history_text):
@@ -316,26 +431,17 @@ STRICT:
 - Keep the plan specific to the focus area and previous chat context
 - Do not use generic advice like "do research" without saying what to research
 """
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
+    parsed = structured_json_completion(
+        system_prompt="Generate a practical 30-day action plan in valid JSON.",
+        user_prompt=prompt,
+        fallback=None,
+        expected_type="list",
         temperature=0.8,
         max_tokens=1200,
-        messages=[
-            {"role": "system", "content": "Generate a practical 30-day action plan in JSON."},
-            {"role": "user", "content": prompt}
-        ]
+        attempts=2
     )
-
-    txt = response.choices[0].message.content.strip()
-    txt = txt.replace("```json", "").replace("```", "")
-
-    try:
-        parsed = json.loads(txt)
-        if isinstance(parsed, list):
-            return parsed
-    except Exception:
-        pass
+    if parsed is not None:
+        return parsed
 
     return [
         {"week": "Week 1", "goal": f"Define the {focus} offer", "tasks": ["Pick one niche audience.", "List the main problem you will solve.", "Write the core offer promise.", "Choose a pricing hypothesis.", "Collect 5 examples of similar products.", "Draft a simple landing page outline."]},
@@ -367,26 +473,17 @@ STRICT:
 - Do not return generic advice
 - Keep actions specific to the idea title and description
 """
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
+    parsed = structured_json_completion(
+        system_prompt="Generate a practical execution plan in valid JSON.",
+        user_prompt=prompt,
+        fallback=None,
+        expected_type="dict",
         temperature=0.8,
         max_tokens=900,
-        messages=[
-            {"role": "system", "content": "Generate a practical execution plan in JSON."},
-            {"role": "user", "content": prompt}
-        ]
+        attempts=2
     )
-
-    txt = response.choices[0].message.content.strip()
-    txt = txt.replace("```json", "").replace("```", "")
-
-    try:
-        parsed = json.loads(txt)
-        if isinstance(parsed, dict):
-            return parsed
-    except Exception:
-        pass
+    if parsed is not None:
+        return parsed
 
     return {
         "title": f"Launch Plan for {idea_title}",
@@ -431,26 +528,17 @@ STRICT:
 - Ask at most one direct question in the reply
 - Keep the tone encouraging and specific
 """
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
+    parsed = structured_json_completion(
+        system_prompt="You are a practical AI income coach who helps users refine and execute business ideas. Return valid JSON only.",
+        user_prompt=prompt,
+        fallback=None,
+        expected_type="dict",
         temperature=0.9,
         max_tokens=900,
-        messages=[
-            {"role": "system", "content": "You are a practical AI income coach who helps users refine and execute business ideas."},
-            {"role": "user", "content": prompt}
-        ]
+        attempts=2
     )
-
-    txt = response.choices[0].message.content.strip()
-    txt = txt.replace("```json", "").replace("```", "")
-
-    try:
-        parsed = json.loads(txt)
-        if isinstance(parsed, dict):
-            return parsed
-    except Exception:
-        pass
+    if parsed is not None:
+        return parsed
 
     return {
         "reply": f"{idea_title} is a solid direction if you keep the first version narrow. Start with one niche customer, one painful workflow, and one offer that can be validated quickly. Do you want a beginner path or a faster-income path?",
@@ -489,26 +577,17 @@ STRICT:
 - Avoid generic startup advice
 - Make the output specific to this idea
 """
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
+    parsed = structured_json_completion(
+        system_prompt="You are a practical launch agent that turns ideas into immediate launch assets. Return valid JSON only.",
+        user_prompt=prompt,
+        fallback=None,
+        expected_type="dict",
         temperature=0.8,
         max_tokens=1000,
-        messages=[
-            {"role": "system", "content": "You are a practical launch agent that turns ideas into immediate launch assets."},
-            {"role": "user", "content": prompt}
-        ]
+        attempts=2
     )
-
-    txt = response.choices[0].message.content.strip()
-    txt = txt.replace("```json", "").replace("```", "")
-
-    try:
-        parsed = json.loads(txt)
-        if isinstance(parsed, dict):
-            return parsed
-    except Exception:
-        pass
+    if parsed is not None:
+        return parsed
 
     return {
         "niche": f"Small teams that need {idea_title} to solve one repeated workflow problem faster.",
@@ -559,26 +638,17 @@ STRICT:
 - next_actions must be an array of EXACTLY 3 practical next validation steps
 - Make the output specific to this exact idea, not generic startup advice
 """
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
+    parsed = structured_json_completion(
+        system_prompt="You are a practical startup validation advisor who helps users test demand before building too much. Return valid JSON only.",
+        user_prompt=prompt,
+        fallback=None,
+        expected_type="dict",
         temperature=0.8,
         max_tokens=1100,
-        messages=[
-            {"role": "system", "content": "You are a practical startup validation advisor who helps users test demand before building too much."},
-            {"role": "user", "content": prompt}
-        ]
+        attempts=2
     )
-
-    txt = response.choices[0].message.content.strip()
-    txt = txt.replace("```json", "").replace("```", "")
-
-    try:
-        parsed = json.loads(txt)
-        if isinstance(parsed, dict):
-            return parsed
-    except Exception:
-        pass
+    if parsed is not None:
+        return parsed
 
     return {
         "validation_summary": f"{idea_title} looks strongest when positioned for one narrow customer with a repeated pain that already costs time or money. Validate urgency first before expanding the offer.",
@@ -647,26 +717,17 @@ STRICT:
 - call_to_action must be one specific next action the user should take this week
 - Make the outputs specific, concrete, and ready to use
 """
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
+    parsed = structured_json_completion(
+        system_prompt="You turn startup ideas into practical first-customer assets. Return valid JSON only.",
+        user_prompt=prompt,
+        fallback=None,
+        expected_type="dict",
         temperature=0.8,
         max_tokens=1200,
-        messages=[
-            {"role": "system", "content": "You turn startup ideas into practical first-customer assets."},
-            {"role": "user", "content": prompt}
-        ]
+        attempts=2
     )
-
-    txt = response.choices[0].message.content.strip()
-    txt = txt.replace("```json", "").replace("```", "")
-
-    try:
-        parsed = json.loads(txt)
-        if isinstance(parsed, dict):
-            return parsed
-    except Exception:
-        pass
+    if parsed is not None:
+        return parsed
 
     return {
         "positioning": f"{idea_title} should be positioned as a focused solution for a narrow buyer who already feels this pain each week and wants faster results without extra complexity.",
@@ -728,26 +789,17 @@ STRICT:
 - recommendation must explain which idea to start with and why
 - Keep the comparison practical and specific
 """
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
+    parsed = structured_json_completion(
+        system_prompt="You compare startup ideas and help users choose the best one to start with. Return valid JSON only.",
+        user_prompt=prompt,
+        fallback=None,
+        expected_type="dict",
         temperature=0.7,
         max_tokens=1200,
-        messages=[
-            {"role": "system", "content": "You compare startup ideas and help users choose the best one to start with."},
-            {"role": "user", "content": prompt}
-        ]
+        attempts=2
     )
-
-    txt = response.choices[0].message.content.strip()
-    txt = txt.replace("```json", "").replace("```", "")
-
-    try:
-        parsed = json.loads(txt)
-        if isinstance(parsed, dict):
-            return parsed
-    except Exception:
-        pass
+    if parsed is not None:
+        return parsed
 
     rankings = []
     for idx, idea in enumerate(compact_ideas):
@@ -768,6 +820,220 @@ STRICT:
         "rankings": rankings,
         "recommendation": f"Start with {winner_title} first because it gives the best balance of speed, clarity, and validation potential for an early launch."
     }
+
+
+def generate_project_strategy_agent(project, history_text):
+    compact_project = {
+        "title": project.get("title", ""),
+        "description": project.get("description", ""),
+        "who_is_this_for": project.get("who_is_this_for", ""),
+        "why_it_works": project.get("why_it_works", ""),
+        "current_goal": project.get("current_goal", ""),
+        "progress": project.get("progress", {}),
+        "validation_score": (project.get("validation_toolkit") or {}).get("validation_score", {}),
+        "execution_summary": (project.get("execution_plan") or {}).get("summary", ""),
+        "first_offer": (project.get("launch_agent") or {}).get("first_offer", ""),
+        "pricing_offer": ((project.get("first_customer_pack") or {}).get("pricing_offer") or {}).get("price_range", "")
+    }
+
+    prompt = f"""
+You are a multi-step Project Strategy Agent for an AI startup workspace.
+
+Project context:
+{json.dumps(compact_project, ensure_ascii=True)}
+
+Conversation context:
+{history_text}
+
+STRICT:
+- Return JSON OBJECT
+- Include these keys: diagnosis, next_best_action, action_queue, agent_workflow, memory_updates, follow_up_questions
+- diagnosis must be an object with keys: stage, bottleneck, confidence, reason
+- stage must be one of: Idea, Validation, Offer, Outreach, Delivery
+- bottleneck must describe the main blocker in one short phrase
+- confidence must be an integer from 1 to 10
+- reason must explain the diagnosis briefly
+- next_best_action must be one specific next action to take in the next 48 hours
+- action_queue must be an array of EXACTLY 3 objects with keys: step, owner, success_signal
+- owner must be one of: User, Coach, Agent
+- agent_workflow must be an array of EXACTLY 3 objects with keys: agent, purpose, input_needed, output_expected
+- memory_updates must be an array of EXACTLY 3 short memory items the app should remember
+- follow_up_questions must be an array of EXACTLY 3 short questions
+- Make the workflow practical and sequential, not generic
+- Base the diagnosis on the actual project state, not a blank template
+"""
+
+    parsed = structured_json_completion(
+        system_prompt="You are a practical multi-step project strategy agent. Return valid JSON only.",
+        user_prompt=prompt,
+        fallback=None,
+        expected_type="dict",
+        temperature=0.7,
+        max_tokens=1200,
+        attempts=2
+    )
+    if parsed is not None:
+        return parsed
+
+    return {
+        "diagnosis": {
+            "stage": "Validation",
+            "bottleneck": "No confirmed buyer signal yet",
+            "confidence": 7,
+            "reason": "The project has direction, but the next highest-value move is still proving that a specific buyer wants this outcome."
+        },
+        "next_best_action": "Send one focused offer message to 5 target buyers and ask for a short feedback call this week.",
+        "action_queue": [
+            {
+                "step": "Narrow the buyer to one exact niche and rewrite the offer in one sentence.",
+                "owner": "User",
+                "success_signal": "You can explain the offer in one line without broad terms like everyone or businesses."
+            },
+            {
+                "step": "Turn the current project into one pilot offer with a price range and outcome promise.",
+                "owner": "Agent",
+                "success_signal": "A simple pilot offer exists with scope, price, and target result."
+            },
+            {
+                "step": "Reach out to 5 prospects and collect objections, buying signals, or demo requests.",
+                "owner": "User",
+                "success_signal": "At least 2 real responses or 1 live conversation happens."
+            }
+        ],
+        "agent_workflow": [
+            {
+                "agent": "Validation Agent",
+                "purpose": "Tighten the niche and confirm the real pain point.",
+                "input_needed": "Current buyer guess and pain point wording.",
+                "output_expected": "A clearer target customer and 5 outreach questions."
+            },
+            {
+                "agent": "Offer Agent",
+                "purpose": "Convert the idea into a paid pilot or starter package.",
+                "input_needed": "Problem statement, target niche, and likely outcome.",
+                "output_expected": "A first offer, pricing range, and one-sentence positioning."
+            },
+            {
+                "agent": "Outreach Agent",
+                "purpose": "Create the messages needed to get first customer conversations.",
+                "input_needed": "Offer summary and target buyer.",
+                "output_expected": "Cold email, LinkedIn DM, and follow-up message."
+            }
+        ],
+        "memory_updates": [
+            f"Primary project is {compact_project.get('title') or 'the selected idea'}.",
+            "The next milestone is buyer validation before feature expansion.",
+            "The app should remember the most responsive niche and strongest objection."
+        ],
+        "follow_up_questions": [
+            "Which exact buyer do you want to target first?",
+            "What painful workflow happens repeatedly for that buyer?",
+            "Would you rather optimize for faster income or stronger long-term scale first?"
+        ]
+    }
+
+
+def generate_rag_advisor(project, knowledge_items, history_text, question):
+    compact_project = {
+        "title": project.get("title", ""),
+        "description": project.get("description", ""),
+        "who_is_this_for": project.get("who_is_this_for", ""),
+        "why_it_works": project.get("why_it_works", ""),
+        "current_goal": project.get("current_goal", ""),
+        "validation_summary": (project.get("validation_toolkit") or {}).get("validation_summary", ""),
+        "execution_summary": (project.get("execution_plan") or {}).get("summary", ""),
+        "first_offer": (project.get("launch_agent") or {}).get("first_offer", ""),
+        "pricing_offer": ((project.get("first_customer_pack") or {}).get("pricing_offer") or {}).get("price_range", "")
+    }
+    retrieval_query = " ".join(
+        part for part in [
+            question,
+            compact_project.get("title"),
+            compact_project.get("current_goal"),
+            compact_project.get("who_is_this_for")
+        ]
+        if part
+    ).strip()
+    retrieval = retrieve_knowledge_context(retrieval_query, knowledge_items or [], limit=4)
+    context_text = retrieval.get("context_text", "").strip()
+    citations = retrieval.get("citations", [])
+
+    if not context_text:
+        return {
+            "answer": "I could not find relevant knowledge notes for this project yet. Add notes about the customer, workflow, constraints, or internal process, then run the Knowledge Advisor again.",
+            "retrieval_summary": "No relevant knowledge chunks matched the current project question.",
+            "cited_notes": [],
+            "recommended_actions": [
+                "Add a note that describes the target customer and their pain point.",
+                "Add a note with any internal process, technical constraint, or prior learning.",
+                "Run the Knowledge Advisor again with a more specific question."
+            ],
+            "knowledge_gaps": [
+                "Target customer detail",
+                "Workflow or process detail",
+                "Constraint or assumption detail"
+            ]
+        }
+
+    prompt = f"""
+You are a retrieval-grounded startup advisor.
+
+Project context:
+{json.dumps(compact_project, ensure_ascii=True)}
+
+Conversation context:
+{history_text}
+
+User question:
+{question}
+
+Retrieved knowledge context:
+{context_text}
+
+STRICT:
+- Return JSON OBJECT only
+- Include these keys: answer, retrieval_summary, cited_notes, recommended_actions, knowledge_gaps
+- answer must be 2 to 4 sentences, practical, and clearly grounded in the retrieved notes
+- retrieval_summary must explain what the notes mainly say in one short sentence
+- cited_notes must be an array with 1 to 4 note labels taken from the retrieved context
+- recommended_actions must be an array of EXACTLY 3 next steps
+- knowledge_gaps must be an array of EXACTLY 3 missing facts or assumptions the user should clarify
+- Do not invent facts that are not supported by the retrieved notes
+- If the notes are incomplete, say so briefly in the answer
+"""
+    parsed = structured_json_completion(
+        system_prompt="You answer using provided retrieval context and return valid JSON only.",
+        user_prompt=prompt,
+        fallback=None,
+        expected_type="dict",
+        temperature=0.4,
+        max_tokens=900,
+        attempts=2
+    )
+    fallback = {
+        "answer": "Based on the saved notes, the project should move forward with a narrow scope and a clearer validation step before expanding. The current knowledge suggests the best next move is to translate those notes into one concrete customer conversation or pilot.",
+        "retrieval_summary": "The saved notes point toward a focused niche, a small first deliverable, and a need for validation before expansion.",
+        "cited_notes": citations[:4],
+        "recommended_actions": [
+            "Turn the strongest retrieved note into one validation conversation this week.",
+            "Use the saved constraints to define the smallest first deliverable.",
+            "Capture one more note after the next customer or stakeholder interaction."
+        ],
+        "knowledge_gaps": [
+            "Proof that the customer will pay",
+            "Evidence that the stated pain is urgent",
+            "Specific constraints that could block delivery"
+        ]
+    }
+    if not parsed:
+        return fallback
+
+    parsed["answer"] = parsed.get("answer") or fallback["answer"]
+    parsed["retrieval_summary"] = parsed.get("retrieval_summary") or fallback["retrieval_summary"]
+    parsed["cited_notes"] = [item for item in parsed.get("cited_notes", []) if item][:4] or citations[:4]
+    parsed["recommended_actions"] = [item for item in (parsed.get("recommended_actions") or []) if item][:3] or fallback["recommended_actions"]
+    parsed["knowledge_gaps"] = [item for item in (parsed.get("knowledge_gaps") or []) if item][:3] or fallback["knowledge_gaps"]
+    return parsed
 
 
 def build_servicenow_payload(project):
@@ -1101,6 +1367,36 @@ async def idea_comparison(data: dict):
 
     return {
         "result": generate_idea_comparison(ideas, history_text)
+    }
+
+
+@app.post("/project-strategy-agent")
+async def project_strategy_agent(data: dict):
+    project = data.get("project", {}) or {}
+    history = data.get("history", [])
+    history_text = build_history_summary(history, limit=10)
+
+    if not isinstance(project, dict) or not project.get("title"):
+        return {"error": "Project data is required."}
+
+    return {
+        "result": generate_project_strategy_agent(project, history_text)
+    }
+
+
+@app.post("/rag-advisor")
+async def rag_advisor(data: dict):
+    project = data.get("project", {}) or {}
+    history = data.get("history", [])
+    history_text = build_history_summary(history, limit=10)
+    question = (data.get("question") or "").strip() or "What should I do next based on my saved knowledge notes?"
+    knowledge_items = [item for item in (data.get("knowledge_items", []) or []) if isinstance(item, dict)]
+
+    if not isinstance(project, dict) or not project.get("title"):
+        return {"error": "Project data is required."}
+
+    return {
+        "result": generate_rag_advisor(project, knowledge_items, history_text, question)
     }
 
 
