@@ -394,6 +394,66 @@ STRICT:
     }
 
 
+def generate_ai_coach_reply(idea_title, idea_description, user_message, history_text):
+    prompt = f"""
+You are an AI Income Coach.
+
+Selected idea:
+Title: {idea_title}
+Description: {idea_description}
+
+Conversation history:
+{history_text}
+
+Latest user message:
+{user_message}
+
+STRICT:
+- Return JSON OBJECT
+- Include these keys: reply, suggested_replies, next_steps
+- reply should sound like a practical mentor, not a generic chatbot
+- suggested_replies must be an array of EXACTLY 3 short follow-up options
+- next_steps must be an array of EXACTLY 3 concrete actions
+- Help the user refine, simplify, validate, or scale the selected idea
+- Ask at most one direct question in the reply
+- Keep the tone encouraging and specific
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0.9,
+        max_tokens=900,
+        messages=[
+            {"role": "system", "content": "You are a practical AI income coach who helps users refine and execute business ideas."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    txt = response.choices[0].message.content.strip()
+    txt = txt.replace("```json", "").replace("```", "")
+
+    try:
+        parsed = json.loads(txt)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    return {
+        "reply": f"{idea_title} is a solid direction if you keep the first version narrow. Start with one niche customer, one painful workflow, and one offer that can be validated quickly. Do you want a beginner path or a faster-income path?",
+        "suggested_replies": [
+            "Give me a beginner version",
+            "Give me a faster income version",
+            "How do I find first customers?"
+        ],
+        "next_steps": [
+            "Pick one niche audience for the idea.",
+            "Define the smallest outcome your offer will deliver.",
+            "Write a short pitch and show it to 5 target users."
+        ]
+    }
+
+
 # =========================
 # MAIN API
 # =========================
@@ -448,3 +508,38 @@ async def generate_income_plan(data: dict):
         idea["best_option"] = (idea == best)
 
     return {"result": ideas}
+
+
+@app.post("/ai-coach")
+async def ai_coach(data: dict):
+    idea_title = data.get("idea_title", "").strip()
+    idea_description = data.get("idea_description", "").strip()
+    user_message = data.get("message", "").strip()
+    history = data.get("history", [])
+    history_text = build_history_summary(history, limit=10)
+
+    if not idea_title:
+        return {
+            "result": {
+                "reply": "Choose an idea first, then I can help refine it into a practical path.",
+                "suggested_replies": [
+                    "Help me pick the best idea",
+                    "Give me a beginner version",
+                    "How do I validate demand?"
+                ],
+                "next_steps": [
+                    "Pick one idea card to coach.",
+                    "Share the version you like most.",
+                    "Ask for refinement, validation, or growth."
+                ]
+            }
+        }
+
+    return {
+        "result": generate_ai_coach_reply(
+            idea_title=idea_title,
+            idea_description=idea_description,
+            user_message=user_message or "Help me move forward with this idea.",
+            history_text=history_text
+        )
+    }
