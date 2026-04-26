@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 import os, json, re, random, base64
 from urllib import error, request
+from urllib.parse import quote
 
 app = FastAPI()
 
@@ -591,6 +592,14 @@ def create_servicenow_record(table_name, payload):
         raise RuntimeError(f"Could not reach ServiceNow: {exc.reason}") from exc
 
 
+def build_servicenow_record_url(table_name, sys_id):
+    if not SERVICENOW_INSTANCE or not table_name or not sys_id:
+        return ""
+
+    target = quote(f"{table_name}.do?sys_id={sys_id}", safe="")
+    return f"{SERVICENOW_INSTANCE}/nav_to.do?uri={target}"
+
+
 def build_issue_payload(issue):
     title = issue.get("title", "Skill2Income issue")
     description = issue.get("description", "")
@@ -755,7 +764,7 @@ async def servicenow_export(data: dict):
                 "sys_id": sys_id,
                 "number": record.get("number", ""),
                 "display": record.get("short_description", project.get("title", "")),
-                "url": f"{SERVICENOW_INSTANCE}/{table_name}.do?sys_id={sys_id}" if SERVICENOW_INSTANCE and sys_id else ""
+                "url": build_servicenow_record_url(table_name, sys_id)
             }
         }
     except Exception as exc:
@@ -781,7 +790,7 @@ async def servicenow_report_issue(data: dict):
                 "sys_id": sys_id,
                 "number": record.get("number", ""),
                 "display": record.get("short_description", issue.get("title", "")),
-                "url": f"{SERVICENOW_INSTANCE}/{table_name}.do?sys_id={sys_id}" if SERVICENOW_INSTANCE and sys_id else ""
+                "url": build_servicenow_record_url(table_name, sys_id)
             }
         }
     except Exception as exc:
