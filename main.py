@@ -454,6 +454,70 @@ STRICT:
     }
 
 
+def generate_launch_agent_plan(idea_title, idea_description, history_text):
+    prompt = f"""
+You are a launch agent for early-stage income ideas.
+
+Selected idea:
+Title: {idea_title}
+Description: {idea_description}
+
+Conversation context:
+{history_text}
+
+STRICT:
+- Return JSON OBJECT
+- Include these keys: niche, first_offer, landing_page_copy, outreach_message, seven_day_plan
+- niche must be a short, specific target audience and pain point
+- first_offer must be a concrete starter offer
+- landing_page_copy must be an object with keys: headline, subheadline, cta
+- outreach_message must be one ready-to-send outreach message
+- seven_day_plan must be an array of EXACTLY 7 short actions, one per day
+- Avoid generic startup advice
+- Make the output specific to this idea
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0.8,
+        max_tokens=1000,
+        messages=[
+            {"role": "system", "content": "You are a practical launch agent that turns ideas into immediate launch assets."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    txt = response.choices[0].message.content.strip()
+    txt = txt.replace("```json", "").replace("```", "")
+
+    try:
+        parsed = json.loads(txt)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    return {
+        "niche": f"Small teams that need {idea_title} to solve one repeated workflow problem faster.",
+        "first_offer": f"Offer a focused pilot of {idea_title} for one niche customer with setup and feedback support included.",
+        "landing_page_copy": {
+            "headline": f"Launch {idea_title} without the usual delay",
+            "subheadline": "A focused solution for teams that need a simpler way to handle this workflow and get results quickly.",
+            "cta": "Book an early access demo"
+        },
+        "outreach_message": f"Hi [Name], I am building {idea_title} for teams dealing with this workflow pain every week. I can show a simple pilot version and would love 15 minutes of feedback if this is relevant to your team.",
+        "seven_day_plan": [
+            "Day 1: Pick one narrow niche and define the one painful workflow you will solve.",
+            "Day 2: Write the offer promise, target outcome, and starter pricing.",
+            "Day 3: Create a basic landing page and short demo outline.",
+            "Day 4: Build the smallest usable version or mockup.",
+            "Day 5: Send outreach to 10 target users in the niche.",
+            "Day 6: Collect objections, questions, and buying signals from replies.",
+            "Day 7: Improve the offer and ask one strong prospect for a pilot."
+        ]
+    }
+
+
 # =========================
 # MAIN API
 # =========================
@@ -474,6 +538,9 @@ async def generate_income_plan(data: dict):
 
     if request_type == "execution_plan":
         return {"result": generate_execution_plan(idea_title or focus, idea_description, history_text)}
+
+    if request_type == "launch_agent":
+        return {"result": generate_launch_agent_plan(idea_title or focus, idea_description, history_text)}
 
     if request_type == "plan" or is_plan_request(interests or skills):
         return {"result": generate_plan(focus, history_text)}
@@ -540,6 +607,22 @@ async def ai_coach(data: dict):
             idea_title=idea_title,
             idea_description=idea_description,
             user_message=user_message or "Help me move forward with this idea.",
+            history_text=history_text
+        )
+    }
+
+
+@app.post("/launch-agent")
+async def launch_agent(data: dict):
+    idea_title = data.get("idea_title", "").strip()
+    idea_description = data.get("idea_description", "").strip()
+    history = data.get("history", [])
+    history_text = build_history_summary(history, limit=10)
+
+    return {
+        "result": generate_launch_agent_plan(
+            idea_title=idea_title or "the selected idea",
+            idea_description=idea_description,
             history_text=history_text
         )
     }
