@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
-import os, json, re, random
+import os, json, re, random, base64
+from urllib import error, request
 
 app = FastAPI()
 
@@ -14,6 +15,9 @@ app.add_middleware(
 )
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+SERVICENOW_INSTANCE = os.getenv("SERVICENOW_INSTANCE", "").rstrip("/")
+SERVICENOW_USERNAME = os.getenv("SERVICENOW_USERNAME", "")
+SERVICENOW_PASSWORD = os.getenv("SERVICENOW_PASSWORD", "")
 
 # =========================
 # ENFORCEMENT RULES
@@ -518,6 +522,110 @@ STRICT:
     }
 
 
+def build_servicenow_payload(project):
+    title = project.get("title", "Income idea")
+    description = project.get("description", "")
+    audience = project.get("who_is_this_for", "")
+    why_it_works = project.get("why_it_works", "")
+    current_goal = project.get("current_goal", "")
+    niche = project.get("niche", "")
+    first_offer = project.get("first_offer", "")
+    launch_plan = project.get("launch_plan", [])
+
+    launch_plan_text = ""
+    if isinstance(launch_plan, list) and launch_plan:
+        launch_plan_text = "\n".join([f"- {item}" for item in launch_plan])
+
+    full_description = "\n\n".join(
+        part for part in [
+            f"Idea: {title}",
+            description,
+            f"Audience: {audience}" if audience else "",
+            f"Why it works: {why_it_works}" if why_it_works else "",
+            f"Current goal: {current_goal}" if current_goal else "",
+            f"Niche: {niche}" if niche else "",
+            f"First offer: {first_offer}" if first_offer else "",
+            f"Launch plan:\n{launch_plan_text}" if launch_plan_text else "",
+            "Created from Skill2Income Active Project"
+        ] if part
+    )
+
+    return {
+        "short_description": f"Skill2Income: {title}",
+        "description": full_description,
+        "comments": "Imported from Skill2Income Active Project",
+        "category": "inquiry"
+    }
+
+
+def create_servicenow_record(table_name, payload):
+    if not SERVICENOW_INSTANCE or not SERVICENOW_USERNAME or not SERVICENOW_PASSWORD:
+        raise ValueError("ServiceNow credentials are not configured on the backend.")
+
+    table = table_name or "incident"
+    url = f"{SERVICENOW_INSTANCE}/api/now/table/{table}"
+
+    credentials = f"{SERVICENOW_USERNAME}:{SERVICENOW_PASSWORD}".encode("utf-8")
+    auth_header = base64.b64encode(credentials).decode("utf-8")
+
+    req = request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Basic {auth_header}",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        },
+        method="POST"
+    )
+
+    try:
+        with request.urlopen(req, timeout=20) as response:
+            response_body = response.read().decode("utf-8")
+            parsed = json.loads(response_body)
+            return parsed.get("result", {})
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"ServiceNow returned {exc.code}: {detail or exc.reason}") from exc
+    except error.URLError as exc:
+        raise RuntimeError(f"Could not reach ServiceNow: {exc.reason}") from exc
+
+
+def build_issue_payload(issue):
+    title = issue.get("title", "Skill2Income issue")
+    description = issue.get("description", "")
+    severity = issue.get("severity", "Medium")
+    feature = issue.get("feature", "")
+    user_email = issue.get("user_email", "")
+    chat_id = issue.get("chat_id", "")
+    active_project = issue.get("active_project", "")
+
+    full_description = "\n\n".join(
+        part for part in [
+            f"Issue: {title}",
+            f"Severity: {severity}",
+            f"Feature: {feature}" if feature else "",
+            f"User Email: {user_email}" if user_email else "",
+            f"Chat ID: {chat_id}" if chat_id else "",
+            f"Active Project: {active_project}" if active_project else "",
+            description,
+            "Raised from Skill2Income support form"
+        ] if part
+    )
+
+    impact_map = {"Low": "3", "Medium": "2", "High": "1"}
+    urgency_map = {"Low": "3", "Medium": "2", "High": "1"}
+
+    return {
+        "short_description": f"Skill2Income Issue: {title}",
+        "description": full_description,
+        "comments": "User raised an issue from the Skill2Income app.",
+        "category": "inquiry",
+        "impact": impact_map.get(severity, "2"),
+        "urgency": urgency_map.get(severity, "2")
+    }
+
+
 # =========================
 # MAIN API
 # =========================
@@ -626,3 +734,55 @@ async def launch_agent(data: dict):
             history_text=history_text
         )
     }
+
+
+@app.post("/servicenow/export")
+async def servicenow_export(data: dict):
+    project = data.get("project", {}) or {}
+    table_name = (data.get("table_name") or "incident").strip()
+
+    if not isinstance(project, dict) or not project.get("title"):
+        return {"error": "Project data is required."}
+
+    try:
+        payload = build_servicenow_payload(project)
+        record = create_servicenow_record(table_name, payload)
+        sys_id = record.get("sys_id")
+
+        return {
+            "result": {
+                "table": table_name,
+                "sys_id": sys_id,
+                "number": record.get("number", ""),
+                "display": record.get("short_description", project.get("title", "")),
+                "url": f"{SERVICENOW_INSTANCE}/{table_name}.do?sys_id={sys_id}" if SERVICENOW_INSTANCE and sys_id else ""
+            }
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@app.post("/servicenow/report-issue")
+async def servicenow_report_issue(data: dict):
+    issue = data.get("issue", {}) or {}
+    table_name = (data.get("table_name") or "incident").strip()
+
+    if not isinstance(issue, dict) or not issue.get("title"):
+        return {"error": "Issue title is required."}
+
+    try:
+        payload = build_issue_payload(issue)
+        record = create_servicenow_record(table_name, payload)
+        sys_id = record.get("sys_id")
+
+        return {
+            "result": {
+                "table": table_name,
+                "sys_id": sys_id,
+                "number": record.get("number", ""),
+                "display": record.get("short_description", issue.get("title", "")),
+                "url": f"{SERVICENOW_INSTANCE}/{table_name}.do?sys_id={sys_id}" if SERVICENOW_INSTANCE and sys_id else ""
+            }
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
