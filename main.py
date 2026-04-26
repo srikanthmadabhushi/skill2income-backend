@@ -20,6 +20,14 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # =========================
 
 BANNED = ["freelance", "course", "blog", "tutorial"]
+PLAN_KEYWORDS = ["30 day", "30 days", "plan", "roadmap", "week by week", "daily plan", "day by day"]
+GENERIC_TITLE_PATTERNS = [
+    "saas tool",
+    "automation system",
+    "template marketplace",
+    "business platform",
+    "service app",
+]
 
 ALLOWED_CATEGORIES = ["saas", "automation", "product", "marketplace", "consulting"]
 FALLBACK_PATTERNS = {
@@ -43,6 +51,55 @@ FALLBACK_PATTERNS = {
 
 def normalize_text(value):
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def is_plan_request(text):
+    normalized = normalize_text(text)
+    return any(keyword in normalized for keyword in PLAN_KEYWORDS)
+
+
+def get_user_messages(history):
+    return [item.get("text", "") for item in history or [] if item.get("role") == "user" and item.get("text")]
+
+
+def build_history_summary(history, limit=6):
+    trimmed = []
+
+    for item in history or []:
+        text = (item.get("text") or "").strip()
+        if not text:
+            continue
+
+        role = item.get("role", "user")
+        compact_text = " ".join(text.split())
+        if len(compact_text) > 220:
+            compact_text = compact_text[:220] + "..."
+        trimmed.append(f"{role}: {compact_text}")
+
+    return "\n".join(trimmed[-limit:])
+
+
+def infer_focus(skills, history):
+    cleaned_skills = (skills or "").strip()
+    if cleaned_skills and not is_plan_request(cleaned_skills):
+        return cleaned_skills
+
+    user_messages = get_user_messages(history)
+
+    for message in reversed(user_messages):
+        if not is_plan_request(message):
+            return message.strip()
+
+    previous_titles, _ = extract_previous_ideas(history)
+    if previous_titles:
+        return next(iter(previous_titles))
+
+    return cleaned_skills or "the selected skill"
+
+
+def is_generic_title(title):
+    normalized = normalize_text(title)
+    return any(pattern in normalized for pattern in GENERIC_TITLE_PATTERNS)
 
 
 def extract_previous_ideas(history):
@@ -76,6 +133,9 @@ def hard_filter(ideas):
 
         # ❌ remove bad patterns
         if any(b in title for b in BANNED):
+            continue
+
+        if is_generic_title(title):
             continue
 
         clean.append(idea)
@@ -162,6 +222,9 @@ def is_valid(ideas):
     if any(any(b in t for b in BANNED) for t in titles):
         return False
 
+    if any(is_generic_title(t) for t in titles):
+        return False
+
     # ❌ if all same type
     models = set(i.get("business_model","") for i in ideas)
     if len(models) < 2:
@@ -181,7 +244,7 @@ def generate_ideas(skills, history_text, banned_titles, banned_models):
     prompt = f"""
 You are a startup strategist.
 
-Generate EXACTLY 5 income ideas.
+Generate EXACTLY 3 income ideas.
 
 Skills: {skills}
 Context: {history_text}
@@ -191,18 +254,22 @@ Previously used business models to avoid reusing too heavily: {banned_models_tex
 STRICT:
 - Avoid freelancing, courses, blogs
 - Focus on SaaS, automation, tools, marketplaces
+- Ideas must belong to 3 different archetypes: one workflow SaaS, one automation service/product, one reusable product or toolkit
 - Every idea must target a specific niche, audience, and pain point
 - Do not repeat or lightly reword any previous title
 - Avoid generic titles like "<skill> SaaS Tool", "<skill> Automation", or "<skill> Marketplace"
+- Avoid broad audiences like "businesses", "everyone", or "developers" without a niche qualifier
 - Make the concepts materially different from one another in customer, workflow, or monetization
 - Use concrete names and descriptions, not generic placeholders
+- Include these fields for each object: title, description, business_model, who_is_this_for, why_it_works, tools_needed, steps, time_to_start, earnings, monthly_estimate, difficulty, timeline, what_if, pro_tip, reason_for_best, personal_reason, score, risk_level, monthly_projection
 
 Return JSON ARRAY.
 """
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
-        temperature=1.3,
+        temperature=1.0,
+        max_tokens=1400,
         messages=[
             {"role": "system", "content": "Generate high-quality startup ideas."},
             {"role": "user", "content": prompt}
@@ -218,6 +285,115 @@ Return JSON ARRAY.
         return []
 
 
+def generate_plan(focus, history_text):
+    prompt = f"""
+You are a startup execution coach.
+
+Create a practical 30-day execution plan for: {focus}
+
+Conversation context:
+{history_text}
+
+STRICT:
+- Return JSON ARRAY with EXACTLY 4 objects
+- Each object must contain: week, goal, tasks
+- week must be "Week 1", "Week 2", "Week 3", "Week 4"
+- tasks must be an array of 6 to 8 concrete action items
+- Build the plan as a real 30-day roadmap, not more income ideas
+- Keep the plan specific to the focus area and previous chat context
+- Do not use generic advice like "do research" without saying what to research
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0.8,
+        max_tokens=1200,
+        messages=[
+            {"role": "system", "content": "Generate a practical 30-day action plan in JSON."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    txt = response.choices[0].message.content.strip()
+    txt = txt.replace("```json", "").replace("```", "")
+
+    try:
+        parsed = json.loads(txt)
+        if isinstance(parsed, list):
+            return parsed
+    except Exception:
+        pass
+
+    return [
+        {"week": "Week 1", "goal": f"Define the {focus} offer", "tasks": ["Pick one niche audience.", "List the main problem you will solve.", "Write the core offer promise.", "Choose a pricing hypothesis.", "Collect 5 examples of similar products.", "Draft a simple landing page outline."]},
+        {"week": "Week 2", "goal": f"Build the first {focus} version", "tasks": ["Define the minimum feature set.", "Set up the project structure.", "Build the core workflow.", "Create one usable demo path.", "Test the main user flow end to end.", "Fix the most obvious friction points."]},
+        {"week": "Week 3", "goal": "Validate with real users", "tasks": ["Share the demo with 5 target users.", "Collect objections and repeated questions.", "Improve the positioning message.", "Tighten the onboarding flow.", "Add one proof point or sample result.", "Prepare a short sales message."]},
+        {"week": "Week 4", "goal": "Launch and iterate", "tasks": ["Publish the landing page.", "Reach out to 20 target users.", "Track replies and demo requests.", "Adjust pricing based on feedback.", "Document the onboarding steps.", "Plan the next month based on traction."]},
+    ]
+
+
+def generate_execution_plan(idea_title, idea_description, history_text):
+    prompt = f"""
+You are a startup execution coach.
+
+Create a highly practical execution plan for this income idea:
+Title: {idea_title}
+Description: {idea_description}
+
+Conversation context:
+{history_text}
+
+STRICT:
+- Return JSON OBJECT
+- Include these keys: title, summary, steps, quick_wins, first_offer
+- title should be a short label for the plan
+- summary should explain how to start in 2 sentences max
+- steps must be an array of EXACTLY 5 concrete steps
+- quick_wins must be an array of EXACTLY 3 fast actions
+- first_offer must be one specific first offer the user can pitch or launch
+- Do not return generic advice
+- Keep actions specific to the idea title and description
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0.8,
+        max_tokens=900,
+        messages=[
+            {"role": "system", "content": "Generate a practical execution plan in JSON."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    txt = response.choices[0].message.content.strip()
+    txt = txt.replace("```json", "").replace("```", "")
+
+    try:
+        parsed = json.loads(txt)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    return {
+        "title": f"Launch Plan for {idea_title}",
+        "summary": f"Start with one narrow customer segment for {idea_title} and build only the smallest usable version. Validate demand with real outreach before expanding features.",
+        "steps": [
+            "Pick one niche customer profile with a painful, repeated workflow.",
+            "Outline the smallest version of the idea that solves one concrete problem.",
+            "Build a clickable demo or simple working prototype for that core use case.",
+            "Show the offer to 10 target users and collect objections and missing needs.",
+            "Turn the best feedback into a paid pilot or early-access offer."
+        ],
+        "quick_wins": [
+            "Write a one-sentence offer for the idea.",
+            "Create a simple landing page or demo screen.",
+            "Send outreach to 5 target prospects this week."
+        ],
+        "first_offer": f"Offer a paid pilot for {idea_title} to one niche customer group with setup support included."
+    }
+
+
 # =========================
 # MAIN API
 # =========================
@@ -226,17 +402,29 @@ Return JSON ARRAY.
 async def generate_income_plan(data: dict):
 
     skills = data.get("skills","")
+    interests = data.get("interests", "")
+    request_type = data.get("request_type", "").strip().lower()
+    plan_focus = data.get("plan_focus", "").strip()
+    idea_title = data.get("idea_title", "").strip()
+    idea_description = data.get("idea_description", "").strip()
     history = data.get("history",[])
-    history_text = "\n".join([h.get("text","") for h in history])
+    history_text = build_history_summary(history)
     previous_titles, previous_models = extract_previous_ideas(history)
+    focus = plan_focus or infer_focus(interests or skills, history)
 
-    max_attempts = 5
+    if request_type == "execution_plan":
+        return {"result": generate_execution_plan(idea_title or focus, idea_description, history_text)}
+
+    if request_type == "plan" or is_plan_request(interests or skills):
+        return {"result": generate_plan(focus, history_text)}
+
+    max_attempts = 3
     attempt = 0
     ideas = []
 
     while attempt < max_attempts:
 
-        raw = generate_ideas(skills, history_text, previous_titles, previous_models)
+        raw = generate_ideas(focus, history_text, previous_titles, previous_models)
 
         # 🔥 ENFORCEMENT PIPELINE
         filtered = hard_filter(raw)
@@ -252,7 +440,7 @@ async def generate_income_plan(data: dict):
 
     # 🚨 FINAL FALLBACK (guaranteed output)
     if len(ideas) < 3:
-        ideas = build_fallback_ideas(skills, previous_titles)
+        ideas = build_fallback_ideas(focus, previous_titles)
 
     # best option
     best = max(ideas, key=lambda x: x.get("score", 0))
