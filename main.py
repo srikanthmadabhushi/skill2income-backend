@@ -1,12 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
-import os
-import json
+import os, json
 
 app = FastAPI()
 
-# ✅ CORS (no change)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,164 +15,173 @@ app.add_middleware(
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-
 # =========================
-# 🔧 HELPER FUNCTIONS
+# ENFORCEMENT RULES
 # =========================
 
-def ensure_fields(idea: dict) -> dict:
-    """Ensure all required fields exist (safe fallback)."""
-    defaults = {
-        "title": "Income Idea",
-        "who_is_this_for": "Beginners looking to start earning online",
-        "description": "A practical way to generate income.",
-        "why_it_works": "Growing demand.",
-        "tools_needed": ["Fiverr", "Upwork"],
-        "steps": ["Start small", "Validate idea"],
-        "time_to_start": "1–3 days",
-        "earnings": "$20–$50",
-        "monthly_estimate": "$500–$2000",
-        "difficulty": "Beginner",
-        "pro_tip": "Stay consistent",
+BANNED = ["freelance", "course", "blog", "tutorial"]
 
-        # 🔥 NEW DECISION ENGINE FIELDS
-        "score": 70,
-        "risk_level": "Medium",
-        "best_option": False,
-        "reason_for_best": "Balanced option",
-        "timeline": "Start → Learn → Earn within 30 days",
-        "what_if": "If you invest more time, results grow faster"
-    }
+ALLOWED_CATEGORIES = ["saas", "automation", "product", "marketplace", "consulting"]
 
-    for k, v in defaults.items():
-        if not idea.get(k) or idea.get(k) in ["-", ""]:
-            idea[k] = v
-
-    return idea
-
-
-def make_unique(ideas: list) -> list:
-    """Avoid duplicate titles."""
-    seen = set()
-    for i, idea in enumerate(ideas):
+def hard_filter(ideas):
+    clean = []
+    for idea in ideas:
         title = idea.get("title", "").lower()
-        if title in seen:
-            idea["title"] += f" ({i+1})"
-        seen.add(title)
-    return ideas
+
+        # ❌ remove bad patterns
+        if any(b in title for b in BANNED):
+            continue
+
+        clean.append(idea)
+
+    return clean
 
 
-def normalize_score(score):
-    """Ensure score is between 0–100."""
-    try:
-        score = int(score)
-        return max(0, min(score, 100))
-    except:
-        return 70
-
-
-def fix_best_option(ideas):
-    """Ensure ONLY ONE best_option = True."""
-    best_found = False
+def enforce_categories(ideas):
+    seen = set()
+    final = []
 
     for idea in ideas:
-        if idea.get("best_option") and not best_found:
-            best_found = True
+        model = idea.get("business_model", "").lower()
+
+        # map loosely into categories
+        if "saas" in model:
+            cat = "saas"
+        elif "automation" in model:
+            cat = "automation"
+        elif "market" in model:
+            cat = "marketplace"
+        elif "product" in model or "template" in model:
+            cat = "product"
         else:
-            idea["best_option"] = False
+            cat = "consulting"
 
-    # If none marked → pick highest score
-    if not best_found and ideas:
-        best = max(ideas, key=lambda x: x.get("score", 0))
-        best["best_option"] = True
+        if cat not in seen:
+            seen.add(cat)
+            final.append(idea)
 
-    return ideas
+    return final
+
+
+def is_valid(ideas):
+    if len(ideas) < 3:
+        return False
+
+    titles = [i.get("title","").lower() for i in ideas]
+
+    # ❌ if any banned slipped through
+    if any(any(b in t for b in BANNED) for t in titles):
+        return False
+
+    # ❌ if all same type
+    models = set(i.get("business_model","") for i in ideas)
+    if len(models) < 2:
+        return False
+
+    return True
 
 
 # =========================
-# 🚀 MAIN API
+# AI CALL
+# =========================
+
+def generate_ideas(skills, history_text):
+    prompt = f"""
+You are a startup strategist.
+
+Generate EXACTLY 5 income ideas.
+
+Skills: {skills}
+Context: {history_text}
+
+STRICT:
+- Avoid freelancing, courses, blogs
+- Focus on SaaS, automation, tools, marketplaces
+- Each idea must be different
+
+Return JSON ARRAY.
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=1.3,
+        messages=[
+            {"role": "system", "content": "Generate high-quality startup ideas."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    txt = response.choices[0].message.content.strip()
+    txt = txt.replace("```json","").replace("```","")
+
+    try:
+        return json.loads(txt)
+    except:
+        return []
+
+
+# =========================
+# MAIN API
 # =========================
 
 @app.post("/generate-income-plan")
 async def generate_income_plan(data: dict):
-    try:
-        skills = data.get("skills")
-        interests = data.get("interests")
-        time = data.get("time")
 
-        # ✅ FIXED PROMPT (CRITICAL)
-        messages = [
+    skills = data.get("skills","")
+    history = data.get("history",[])
+    history_text = "\n".join([h.get("text","") for h in history])
+
+    max_attempts = 5
+    attempt = 0
+    ideas = []
+
+    while attempt < max_attempts:
+
+        raw = generate_ideas(skills, history_text)
+
+        # 🔥 ENFORCEMENT PIPELINE
+        filtered = hard_filter(raw)
+        categorized = enforce_categories(filtered)
+
+        ideas = categorized[:3]
+
+        if is_valid(ideas):
+            break
+
+        attempt += 1
+
+    # 🚨 FINAL FALLBACK (guaranteed output)
+    if len(ideas) < 3:
+        ideas = [
             {
-                "role": "system",
-                "content": "You are an AI income decision engine that generates realistic, personalized, and actionable income strategies."
+                "title": f"{skills} SaaS Analytics Tool",
+                "description": "Build a subscription tool solving a niche problem",
+                "business_model": "SaaS",
+                "score": 80,
+                "risk_level": "Medium",
+                "monthly_projection": {"month1":"$0","month2":"$500","month3":"$2000"}
             },
             {
-                "role": "user",
-                "content": f"""
-User Profile:
-Skills: {skills}
-Interests: {interests}
-Time available: {time}
-
-Generate EXACTLY 3 DIFFERENT income ideas.
-
-For EACH idea return JSON with:
-
-- title
-- who_is_this_for
-- description
-- why_it_works
-- tools_needed (array)
-- steps (array)
-- time_to_start
-- earnings
-- monthly_estimate
-- difficulty
-
-NEW FIELDS:
-- score (0–100)
-- risk_level (Low / Medium / High)
-- best_option (true/false)
-- reason_for_best
-- timeline
-- what_if
-
-Rules:
-- Only ONE idea must have best_option = true
-- All ideas must be different
-- Make results realistic and practical
-- Return ONLY JSON array (no text, no explanation)
-"""
+                "title": f"{skills} Automation System",
+                "description": "Automate repetitive business workflows",
+                "business_model": "Automation",
+                "score": 75,
+                "risk_level": "Low",
+                "monthly_projection": {"month1":"$200","month2":"$800","month3":"$2500"}
+            },
+            {
+                "title": f"{skills} Template Marketplace",
+                "description": "Sell reusable templates/assets",
+                "business_model": "Product",
+                "score": 78,
+                "risk_level": "Low",
+                "monthly_projection": {"month1":"$100","month2":"$600","month3":"$1800"}
             }
         ]
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=0.7
-        )
+    # best option
+    best = max(ideas, key=lambda x: x.get("score", 0))
+    for idea in ideas:
+        idea["best_option"] = (idea == best)
 
-        result_text = response.choices[0].message.content.strip()
-
-        # Clean markdown if any
-        result_text = result_text.replace("```json", "").replace("```", "").strip()
-
-        try:
-            ideas = json.loads(result_text)
-        except:
-            return {"error": "Invalid JSON from AI", "raw": result_text}
-
-        # ✅ CLEAN + VALIDATE
-        cleaned = []
-        for idea in ideas:
-            idea = ensure_fields(idea)
-            idea["score"] = normalize_score(idea.get("score", 70))
-            cleaned.append(idea)
-
-        cleaned = make_unique(cleaned)
-        cleaned = fix_best_option(cleaned)
-
-        return {"result": cleaned}
-
-    except Exception as e:
-        return {"error": str(e)}
+    return {"result": ideas}
