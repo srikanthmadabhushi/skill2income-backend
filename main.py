@@ -19,6 +19,14 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 SERVICENOW_INSTANCE = os.getenv("SERVICENOW_INSTANCE", "").rstrip("/")
 SERVICENOW_USERNAME = os.getenv("SERVICENOW_USERNAME", "")
 SERVICENOW_PASSWORD = os.getenv("SERVICENOW_PASSWORD", "")
+SERVICENOW_INCIDENT_STATE_MAP = {
+    "1": "New",
+    "2": "In Progress",
+    "3": "On Hold",
+    "6": "Resolved",
+    "7": "Closed",
+    "8": "Canceled",
+}
 
 # =========================
 # ENFORCEMENT RULES
@@ -615,6 +623,153 @@ STRICT:
     }
 
 
+def generate_first_customer_pack(idea_title, idea_description, history_text):
+    prompt = f"""
+You are a practical go-to-market advisor.
+
+Selected idea:
+Title: {idea_title}
+Description: {idea_description}
+
+Conversation context:
+{history_text}
+
+STRICT:
+- Return JSON OBJECT
+- Include these keys: positioning, cold_email, linkedin_dm, whatsapp_pitch, pricing_offer, landing_page_copy, call_to_action
+- positioning must be one short paragraph explaining the offer and ideal buyer
+- cold_email must be a ready-to-send short email
+- linkedin_dm must be a short direct message
+- whatsapp_pitch must be a short informal pitch
+- pricing_offer must be an object with keys: package_name, price_range, what_is_included
+- landing_page_copy must be an object with keys: headline, subheadline, proof_points
+- proof_points must be an array of EXACTLY 3 bullets
+- call_to_action must be one specific next action the user should take this week
+- Make the outputs specific, concrete, and ready to use
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0.8,
+        max_tokens=1200,
+        messages=[
+            {"role": "system", "content": "You turn startup ideas into practical first-customer assets."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    txt = response.choices[0].message.content.strip()
+    txt = txt.replace("```json", "").replace("```", "")
+
+    try:
+        parsed = json.loads(txt)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    return {
+        "positioning": f"{idea_title} should be positioned as a focused solution for a narrow buyer who already feels this pain each week and wants faster results without extra complexity.",
+        "cold_email": f"Subject: Quick idea for improving [pain point]\n\nHi [Name], I am building {idea_title} for teams that deal with this workflow repeatedly. I put together a simple approach that could remove a lot of manual effort around [specific pain point]. Would you be open to a short 15-minute call this week so I can show you the concept and get your feedback?",
+        "linkedin_dm": f"Hi [Name], I am testing {idea_title} for teams dealing with [specific pain point]. I would love to show you a quick concept and hear whether this would be useful for your workflow.",
+        "whatsapp_pitch": f"Hi [Name], I am building {idea_title} to help teams handle this workflow faster. I have a simple early version and would love to get your feedback if this problem comes up often for you.",
+        "pricing_offer": {
+            "package_name": f"{idea_title} Starter Pilot",
+            "price_range": "$250-$750 for the first setup or pilot",
+            "what_is_included": [
+                "One focused workflow setup for a narrow use case",
+                "Basic onboarding and feedback loop",
+                "A short review call after the first usage period"
+            ]
+        },
+        "landing_page_copy": {
+            "headline": f"Get results faster with {idea_title}",
+            "subheadline": "A focused offer for niche buyers who want a simpler way to handle this workflow and start seeing value quickly.",
+            "proof_points": [
+                "Focused on one painful workflow instead of a bloated platform",
+                "Fast pilot setup for an early real-world use case",
+                "Built around real buyer feedback before scaling features"
+            ]
+        },
+        "call_to_action": "Send the cold email or LinkedIn DM to 5 target prospects and book 2 short discovery conversations this week."
+    }
+
+
+def generate_idea_comparison(ideas, history_text):
+    compact_ideas = []
+    for idea in ideas[:3]:
+        compact_ideas.append({
+            "title": idea.get("title", ""),
+            "description": idea.get("description", ""),
+            "who_is_this_for": idea.get("who_is_this_for", ""),
+            "why_it_works": idea.get("why_it_works", ""),
+            "difficulty": idea.get("difficulty", ""),
+            "timeline": idea.get("timeline", ""),
+            "monthly_estimate": idea.get("monthly_estimate", "")
+        })
+
+    prompt = f"""
+You are a startup decision advisor.
+
+Ideas to compare:
+{json.dumps(compact_ideas, ensure_ascii=True)}
+
+Conversation context:
+{history_text}
+
+STRICT:
+- Return JSON OBJECT
+- Include these keys: comparison_summary, winner_title, rankings, recommendation
+- comparison_summary must be 2 sentences max
+- winner_title must match one of the input titles exactly
+- rankings must be an array with one object per idea
+- Each ranking object must include: title, effort, speed_to_income, scalability, validation_difficulty, best_for, caution
+- effort, speed_to_income, scalability, validation_difficulty must each be one of: Low, Medium, High
+- recommendation must explain which idea to start with and why
+- Keep the comparison practical and specific
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0.7,
+        max_tokens=1200,
+        messages=[
+            {"role": "system", "content": "You compare startup ideas and help users choose the best one to start with."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    txt = response.choices[0].message.content.strip()
+    txt = txt.replace("```json", "").replace("```", "")
+
+    try:
+        parsed = json.loads(txt)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    rankings = []
+    for idx, idea in enumerate(compact_ideas):
+        rankings.append({
+            "title": idea.get("title", f"Idea {idx + 1}"),
+            "effort": "Medium" if idx == 0 else ("Low" if idx == 1 else "High"),
+            "speed_to_income": "High" if idx == 0 else ("Medium" if idx == 1 else "Low"),
+            "scalability": "Medium" if idx == 0 else ("Low" if idx == 1 else "High"),
+            "validation_difficulty": "Medium" if idx == 0 else ("Low" if idx == 1 else "High"),
+            "best_for": "Starting with a focused niche and validating demand quickly.",
+            "caution": "Keep the first version narrow so you do not overbuild too early."
+        })
+
+    winner_title = compact_ideas[0].get("title", "Idea 1") if compact_ideas else "Idea 1"
+    return {
+        "comparison_summary": "These ideas differ most in how fast you can validate them and how much complexity they require up front. Start with the one that reaches real customer conversations fastest without too much build effort.",
+        "winner_title": winner_title,
+        "rankings": rankings,
+        "recommendation": f"Start with {winner_title} first because it gives the best balance of speed, clarity, and validation potential for an early launch."
+    }
+
+
 def build_servicenow_payload(project):
     title = project.get("title", "Income idea")
     description = project.get("description", "")
@@ -690,7 +845,7 @@ def fetch_servicenow_record_by_number(table_name, record_number):
 
     table = table_name or "incident"
     encoded_number = quote(f"number={record_number}", safe="=&")
-    url = f"{SERVICENOW_INSTANCE}/api/now/table/{table}?sysparm_limit=1&sysparm_query={encoded_number}"
+    url = f"{SERVICENOW_INSTANCE}/api/now/table/{table}?sysparm_limit=1&sysparm_query={encoded_number}&sysparm_display_value=all"
 
     credentials = f"{SERVICENOW_USERNAME}:{SERVICENOW_PASSWORD}".encode("utf-8")
     auth_header = base64.b64encode(credentials).decode("utf-8")
@@ -723,6 +878,32 @@ def build_servicenow_record_url(table_name, sys_id):
 
     target = quote(f"{table_name}.do?sys_id={sys_id}", safe="")
     return f"{SERVICENOW_INSTANCE}/nav_to.do?uri={target}"
+
+
+def get_servicenow_field_value(record, field_name):
+    value = record.get(field_name, "")
+    if isinstance(value, dict):
+        return value.get("value", "") or value.get("display_value", "")
+    return value
+
+
+def get_servicenow_field_display(record, field_name):
+    value = record.get(field_name, "")
+    if isinstance(value, dict):
+        return value.get("display_value", "") or value.get("value", "")
+    return value
+
+
+def get_servicenow_status_label(record, table_name="incident"):
+    display = str(get_servicenow_field_display(record, "state") or "").strip()
+    if display and not display.isdigit():
+        return display
+
+    raw_value = str(get_servicenow_field_value(record, "state") or "").strip()
+    if table_name == "incident":
+        return SERVICENOW_INCIDENT_STATE_MAP.get(raw_value, raw_value or "Unknown")
+
+    return raw_value or "Unknown"
 
 
 def build_issue_payload(issue):
@@ -786,6 +967,13 @@ async def generate_income_plan(data: dict):
 
     if request_type == "validation_toolkit":
         return {"result": generate_validation_toolkit(idea_title or focus, idea_description, history_text)}
+
+    if request_type == "first_customer_pack":
+        return {"result": generate_first_customer_pack(idea_title or focus, idea_description, history_text)}
+
+    if request_type == "idea_comparison":
+        ideas_to_compare = data.get("ideas", []) or []
+        return {"result": generate_idea_comparison(ideas_to_compare, history_text)}
 
     if request_type == "plan" or is_plan_request(interests or skills):
         return {"result": generate_plan(focus, history_text)}
@@ -889,6 +1077,33 @@ async def validation_toolkit(data: dict):
     }
 
 
+@app.post("/first-customer-pack")
+async def first_customer_pack(data: dict):
+    idea_title = data.get("idea_title", "").strip()
+    idea_description = data.get("idea_description", "").strip()
+    history = data.get("history", [])
+    history_text = build_history_summary(history, limit=10)
+
+    return {
+        "result": generate_first_customer_pack(
+            idea_title=idea_title or "the selected idea",
+            idea_description=idea_description,
+            history_text=history_text
+        )
+    }
+
+
+@app.post("/idea-comparison")
+async def idea_comparison(data: dict):
+    ideas = data.get("ideas", []) or []
+    history = data.get("history", [])
+    history_text = build_history_summary(history, limit=10)
+
+    return {
+        "result": generate_idea_comparison(ideas, history_text)
+    }
+
+
 @app.post("/servicenow/export")
 async def servicenow_export(data: dict):
     project = data.get("project", {}) or {}
@@ -906,10 +1121,10 @@ async def servicenow_export(data: dict):
             "result": {
                 "table": table_name,
                 "sys_id": sys_id,
-                "number": record.get("number", ""),
-                "display": record.get("short_description", project.get("title", "")),
+                "number": get_servicenow_field_value(record, "number"),
+                "display": get_servicenow_field_display(record, "short_description") or project.get("title", ""),
                 "url": build_servicenow_record_url(table_name, sys_id),
-                "status": record.get("state", "Submitted")
+                "status": get_servicenow_status_label(record, table_name) or "Submitted"
             }
         }
     except Exception as exc:
@@ -933,10 +1148,10 @@ async def servicenow_report_issue(data: dict):
             "result": {
                 "table": table_name,
                 "sys_id": sys_id,
-                "number": record.get("number", ""),
-                "display": record.get("short_description", issue.get("title", "")),
+                "number": get_servicenow_field_value(record, "number"),
+                "display": get_servicenow_field_display(record, "short_description") or issue.get("title", ""),
                 "url": build_servicenow_record_url(table_name, sys_id),
-                "status": record.get("state", "Submitted")
+                "status": get_servicenow_status_label(record, table_name) or "Submitted"
             }
         }
     except Exception as exc:
@@ -959,13 +1174,13 @@ async def servicenow_ticket_status(data: dict):
         return {
             "result": {
                 "table": table_name,
-                "number": record.get("number", ticket_number),
-                "status": record.get("state", "Unknown"),
-                "display": record.get("short_description", ""),
-                "sys_id": record.get("sys_id", ""),
-                "updated_at": record.get("sys_updated_on", ""),
-                "created_at": record.get("sys_created_on", ""),
-                "priority": record.get("priority", "")
+                "number": get_servicenow_field_value(record, "number") or ticket_number,
+                "status": get_servicenow_status_label(record, table_name),
+                "display": get_servicenow_field_display(record, "short_description"),
+                "sys_id": get_servicenow_field_value(record, "sys_id"),
+                "updated_at": get_servicenow_field_display(record, "sys_updated_on") or get_servicenow_field_value(record, "sys_updated_on"),
+                "created_at": get_servicenow_field_display(record, "sys_created_on") or get_servicenow_field_value(record, "sys_created_on"),
+                "priority": get_servicenow_field_display(record, "priority") or get_servicenow_field_value(record, "priority")
             }
         }
     except Exception as exc:
