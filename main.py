@@ -684,6 +684,39 @@ def create_servicenow_record(table_name, payload):
         raise RuntimeError(f"Could not reach ServiceNow: {exc.reason}") from exc
 
 
+def fetch_servicenow_record_by_number(table_name, record_number):
+    if not SERVICENOW_INSTANCE or not SERVICENOW_USERNAME or not SERVICENOW_PASSWORD:
+        raise ValueError("ServiceNow credentials are not configured on the backend.")
+
+    table = table_name or "incident"
+    encoded_number = quote(f"number={record_number}", safe="=&")
+    url = f"{SERVICENOW_INSTANCE}/api/now/table/{table}?sysparm_limit=1&sysparm_query={encoded_number}"
+
+    credentials = f"{SERVICENOW_USERNAME}:{SERVICENOW_PASSWORD}".encode("utf-8")
+    auth_header = base64.b64encode(credentials).decode("utf-8")
+
+    req = request.Request(
+        url,
+        headers={
+            "Authorization": f"Basic {auth_header}",
+            "Accept": "application/json"
+        },
+        method="GET"
+    )
+
+    try:
+        with request.urlopen(req, timeout=20) as response:
+            response_body = response.read().decode("utf-8")
+            parsed = json.loads(response_body)
+            results = parsed.get("result", []) or []
+            return results[0] if results else None
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"ServiceNow returned {exc.code}: {detail or exc.reason}") from exc
+    except error.URLError as exc:
+        raise RuntimeError(f"Could not reach ServiceNow: {exc.reason}") from exc
+
+
 def build_servicenow_record_url(table_name, sys_id):
     if not SERVICENOW_INSTANCE or not table_name or not sys_id:
         return ""
@@ -904,6 +937,35 @@ async def servicenow_report_issue(data: dict):
                 "display": record.get("short_description", issue.get("title", "")),
                 "url": build_servicenow_record_url(table_name, sys_id),
                 "status": record.get("state", "Submitted")
+            }
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@app.post("/servicenow/ticket-status")
+async def servicenow_ticket_status(data: dict):
+    ticket_number = (data.get("ticket_number") or "").strip().upper()
+    table_name = (data.get("table_name") or "incident").strip()
+
+    if not ticket_number:
+        return {"error": "Ticket number is required."}
+
+    try:
+        record = fetch_servicenow_record_by_number(table_name, ticket_number)
+        if not record:
+            return {"error": f"Ticket {ticket_number} was not found."}
+
+        return {
+            "result": {
+                "table": table_name,
+                "number": record.get("number", ticket_number),
+                "status": record.get("state", "Unknown"),
+                "display": record.get("short_description", ""),
+                "sys_id": record.get("sys_id", ""),
+                "updated_at": record.get("sys_updated_on", ""),
+                "created_at": record.get("sys_created_on", ""),
+                "priority": record.get("priority", "")
             }
         }
     except Exception as exc:
