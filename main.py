@@ -523,6 +523,98 @@ STRICT:
     }
 
 
+def generate_validation_toolkit(idea_title, idea_description, history_text):
+    prompt = f"""
+You are a startup validation advisor.
+
+Selected idea:
+Title: {idea_title}
+Description: {idea_description}
+
+Conversation context:
+{history_text}
+
+STRICT:
+- Return JSON OBJECT
+- Include these keys: validation_summary, validation_score, target_customer, pains_to_confirm, competitor_snapshot, outreach_questions, green_flags, red_flags, next_actions
+- validation_summary must be 2 sentences max
+- validation_score must be an object with keys: label, score, reason
+- label must be one of: Green, Yellow, Red
+- score must be an integer from 1 to 10
+- reason must explain the score in one short sentence
+- target_customer must describe one clear niche customer
+- pains_to_confirm must be an array of EXACTLY 3 pain points to verify
+- competitor_snapshot must be an array of EXACTLY 3 short observations about alternatives or competitors
+- outreach_questions must be an array of EXACTLY 5 short customer validation questions
+- green_flags must be an array of EXACTLY 3 positive signals to watch for
+- red_flags must be an array of EXACTLY 3 warning signs to watch for
+- next_actions must be an array of EXACTLY 3 practical next validation steps
+- Make the output specific to this exact idea, not generic startup advice
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0.8,
+        max_tokens=1100,
+        messages=[
+            {"role": "system", "content": "You are a practical startup validation advisor who helps users test demand before building too much."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    txt = response.choices[0].message.content.strip()
+    txt = txt.replace("```json", "").replace("```", "")
+
+    try:
+        parsed = json.loads(txt)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    return {
+        "validation_summary": f"{idea_title} looks strongest when positioned for one narrow customer with a repeated pain that already costs time or money. Validate urgency first before expanding the offer.",
+        "validation_score": {
+            "label": "Yellow",
+            "score": 7,
+            "reason": "The direction is promising, but demand needs proof from real customer conversations."
+        },
+        "target_customer": f"A niche buyer who repeatedly faces the problem solved by {idea_title} and wants a faster, simpler outcome.",
+        "pains_to_confirm": [
+            "How often the target user faces this problem each week.",
+            "What the current workaround costs in time, money, or frustration.",
+            "Whether the user would pay for a simpler result instead of continuing with the current process."
+        ],
+        "competitor_snapshot": [
+            "Some users may already patch this problem with manual spreadsheets or general-purpose tools.",
+            "The main competition may be a service provider or in-house workaround rather than a direct software product.",
+            "The best positioning angle is usually speed, simplicity, or niche-specific results."
+        ],
+        "outreach_questions": [
+            "How are you solving this problem today?",
+            "What is the most frustrating part of the current workflow?",
+            "How often does this issue happen in a normal week?",
+            "What would a good solution need to do to feel worth paying for?",
+            "Would you try a pilot if it solved this in a simpler way?"
+        ],
+        "green_flags": [
+            "People describe the same pain point in similar words.",
+            "Users already spend time or money on a workaround.",
+            "Prospects ask when they can try it or see a demo."
+        ],
+        "red_flags": [
+            "The problem sounds nice to solve but not urgent.",
+            "Users say they rarely face the issue.",
+            "People like the idea but avoid committing to a pilot or next conversation."
+        ],
+        "next_actions": [
+            "Talk to 5 target users in one narrow niche.",
+            "Test one simple offer statement and see which pain point gets the strongest reaction.",
+            "Use the feedback to tighten the niche before building more features."
+        ]
+    }
+
+
 def build_servicenow_payload(project):
     title = project.get("title", "Income idea")
     description = project.get("description", "")
@@ -659,6 +751,9 @@ async def generate_income_plan(data: dict):
     if request_type == "launch_agent":
         return {"result": generate_launch_agent_plan(idea_title or focus, idea_description, history_text)}
 
+    if request_type == "validation_toolkit":
+        return {"result": generate_validation_toolkit(idea_title or focus, idea_description, history_text)}
+
     if request_type == "plan" or is_plan_request(interests or skills):
         return {"result": generate_plan(focus, history_text)}
 
@@ -745,6 +840,22 @@ async def launch_agent(data: dict):
     }
 
 
+@app.post("/validation-toolkit")
+async def validation_toolkit(data: dict):
+    idea_title = data.get("idea_title", "").strip()
+    idea_description = data.get("idea_description", "").strip()
+    history = data.get("history", [])
+    history_text = build_history_summary(history, limit=10)
+
+    return {
+        "result": generate_validation_toolkit(
+            idea_title=idea_title or "the selected idea",
+            idea_description=idea_description,
+            history_text=history_text
+        )
+    }
+
+
 @app.post("/servicenow/export")
 async def servicenow_export(data: dict):
     project = data.get("project", {}) or {}
@@ -764,7 +875,8 @@ async def servicenow_export(data: dict):
                 "sys_id": sys_id,
                 "number": record.get("number", ""),
                 "display": record.get("short_description", project.get("title", "")),
-                "url": build_servicenow_record_url(table_name, sys_id)
+                "url": build_servicenow_record_url(table_name, sys_id),
+                "status": record.get("state", "Submitted")
             }
         }
     except Exception as exc:
@@ -790,7 +902,8 @@ async def servicenow_report_issue(data: dict):
                 "sys_id": sys_id,
                 "number": record.get("number", ""),
                 "display": record.get("short_description", issue.get("title", "")),
-                "url": build_servicenow_record_url(table_name, sys_id)
+                "url": build_servicenow_record_url(table_name, sys_id),
+                "status": record.get("state", "Submitted")
             }
         }
     except Exception as exc:
