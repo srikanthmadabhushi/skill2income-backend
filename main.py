@@ -1036,6 +1036,192 @@ STRICT:
     return parsed
 
 
+def generate_recommendation_engine(project, analytics_summary, history_text):
+    progress = project.get("progress", {}) or {}
+    linked_tickets = project.get("support_tickets", []) or []
+    validation_score = (((project.get("validation_toolkit") or {}).get("validation_score") or {}).get("score")) or 0
+    progress_done = sum(1 for value in progress.values() if value)
+    total_progress = max(len(progress), 1)
+    knowledge_notes = int((analytics_summary or {}).get("knowledge_notes", 0) or 0)
+    timeline_events = int((analytics_summary or {}).get("timeline_events", 0) or 0)
+    coach_turns = int((analytics_summary or {}).get("coach_turns", 0) or 0)
+    usage_signals = int((analytics_summary or {}).get("usage_signals", 0) or 0)
+    open_ticket_count = int((analytics_summary or {}).get("open_ticket_count", 0) or 0)
+
+    readiness_score = min(
+        100,
+        progress_done * 11
+        + min(validation_score * 4, 32)
+        + (12 if project.get("execution_plan") else 0)
+        + (10 if project.get("launch_agent") else 0)
+        + (10 if project.get("first_customer_pack") else 0)
+        + min(knowledge_notes * 4, 12)
+    )
+    momentum_score = min(
+        100,
+        progress_done * 9
+        + min(timeline_events * 3, 24)
+        + min(coach_turns * 4, 16)
+        + min(usage_signals * 2, 14)
+        - min(open_ticket_count * 5, 15)
+    )
+
+    if not progress.get("knowledge_advisor_completed") and knowledge_notes > 0:
+        recommended_workflow = "Knowledge Advisor"
+        next_best_action = "Run the Knowledge Advisor to turn your saved notes into a grounded next-step recommendation."
+    elif not progress.get("validation_completed"):
+        recommended_workflow = "Validation Toolkit"
+        next_best_action = "Run the Validation Toolkit to confirm buyer pain, red flags, and validation questions before expanding."
+    elif not progress.get("execution_plan_opened"):
+        recommended_workflow = "Execution Plan"
+        next_best_action = "Open the execution plan so the project has a concrete step-by-step path instead of only a concept."
+    elif not project.get("launch_agent"):
+        recommended_workflow = "Launch Agent"
+        next_best_action = "Run the Launch Agent to define the niche, offer, landing copy, and first 7-day launch path."
+    elif not progress.get("first_customer_pack_ready"):
+        recommended_workflow = "First Customer Pack"
+        next_best_action = "Generate the First Customer Pack so you have real messages and an offer ready to send."
+    else:
+        recommended_workflow = "AI Coach"
+        next_best_action = "Use AI Coach to refine objections, outreach, and the next experiment based on everything completed so far."
+
+    blockers = []
+    if validation_score and validation_score < 6:
+        blockers.append("Validation score is still weak, so demand risk remains high.")
+    if not knowledge_notes:
+        blockers.append("No saved knowledge notes yet, so answers are less grounded in your own context.")
+    if not project.get("first_customer_pack"):
+        blockers.append("Outreach assets are missing, which slows down first-customer conversations.")
+    if open_ticket_count:
+        blockers.append("There are unresolved support or workflow tickets that may block execution.")
+    if not blockers:
+        blockers.append("Main blocker is consistency: the project needs repeated customer-facing action this week.")
+
+    top_recommendations = [
+        {
+            "workflow": recommended_workflow,
+            "reason": next_best_action,
+            "confidence": 9 if readiness_score >= 45 else 8
+        },
+        {
+            "workflow": "Knowledge Base" if knowledge_notes < 3 else "My Projects",
+            "reason": "Strengthen reusable context so later agents and advisors can work with more specific evidence.",
+            "confidence": 7
+        },
+        {
+            "workflow": "ServiceNow Ticket Review" if open_ticket_count else "Project Timeline Review",
+            "reason": "Review blockers or recent activity so the next experiment reflects the current project state.",
+            "confidence": 6
+        }
+    ]
+
+    return {
+        "readiness_score": readiness_score,
+        "momentum_score": max(momentum_score, 0),
+        "project_stage": "Ready to sell" if readiness_score >= 75 else "Launch prep" if readiness_score >= 55 else "Validation" if readiness_score >= 35 else "Early discovery",
+        "recommended_workflow": recommended_workflow,
+        "next_best_action": next_best_action,
+        "top_recommendations": top_recommendations,
+        "blockers": blockers[:3],
+        "feature_snapshot": {
+            "progress_completed": progress_done,
+            "progress_total": total_progress,
+            "validation_score": validation_score,
+            "knowledge_notes": knowledge_notes,
+            "timeline_events": timeline_events,
+            "linked_ticket_count": len(linked_tickets),
+            "open_ticket_count": open_ticket_count
+        }
+    }
+
+
+def generate_project_evaluation(project, analytics_summary, history_text):
+    compact_project = {
+        "title": project.get("title", ""),
+        "description": project.get("description", ""),
+        "who_is_this_for": project.get("who_is_this_for", ""),
+        "why_it_works": project.get("why_it_works", ""),
+        "current_goal": project.get("current_goal", ""),
+        "progress": project.get("progress", {}),
+        "execution_plan_summary": (project.get("execution_plan") or {}).get("summary", ""),
+        "validation_summary": (project.get("validation_toolkit") or {}).get("validation_summary", ""),
+        "launch_offer": (project.get("launch_agent") or {}).get("first_offer", ""),
+        "knowledge_summary": (project.get("rag_advisor") or {}).get("retrieval_summary", ""),
+        "recommendation_workflow": (project.get("recommendation_engine") or {}).get("recommended_workflow", ""),
+        "timeline_events": len(project.get("timeline", []) or [])
+    }
+    compact_analytics = analytics_summary or {}
+    prompt = f"""
+You are an AI project evaluator and observability reviewer.
+
+Project:
+{json.dumps(compact_project, ensure_ascii=True)}
+
+Analytics summary:
+{json.dumps(compact_analytics, ensure_ascii=True)}
+
+Conversation context:
+{history_text}
+
+STRICT:
+- Return JSON OBJECT only
+- Include these keys: evaluation_summary, output_quality_score, evidence_coverage, consistency_checks, risk_flags, blind_spots, monitoring_recommendations
+- evaluation_summary must be 2 sentences max
+- output_quality_score must be an object with keys: score, label, reason
+- score must be an integer from 1 to 10
+- label must be one of: Strong, Moderate, Weak
+- evidence_coverage must be an array of EXACTLY 3 short bullets about what evidence is present or missing
+- consistency_checks must be an array of EXACTLY 3 short checks across project signals, with each item written as pass or caution style text
+- risk_flags must be an array of EXACTLY 3 short risks
+- blind_spots must be an array of EXACTLY 3 missing perspectives or data points
+- monitoring_recommendations must be an array of EXACTLY 3 concrete things to track next
+- Base the evaluation on the provided project data and analytics only
+"""
+    parsed = structured_json_completion(
+        system_prompt="You evaluate project quality and observability. Return valid JSON only.",
+        user_prompt=prompt,
+        fallback=None,
+        expected_type="dict",
+        temperature=0.35,
+        max_tokens=1100,
+        attempts=2
+    )
+    fallback = {
+        "evaluation_summary": "The project has useful execution structure, but it still needs stronger proof that users will engage and pay. Observability is improving, though customer evidence is still the weakest area.",
+        "output_quality_score": {
+            "score": 7,
+            "label": "Moderate",
+            "reason": "The workspace has multiple useful outputs, but customer evidence and monitoring still need to mature."
+        },
+        "evidence_coverage": [
+            "Project structure and workflow outputs are present.",
+            "Customer validation evidence is only partially covered.",
+            "Operational notes and timeline data exist but are still light."
+        ],
+        "consistency_checks": [
+            "Pass: Project has a clear title, goal, and reusable workspace state.",
+            "Caution: Validation and launch artifacts may not yet align with actual buyer feedback.",
+            "Caution: Monitoring signals are present, but they are not yet rich enough for confident prioritization."
+        ],
+        "risk_flags": [
+            "The project may be overbuilt before demand is proven.",
+            "Important buyer objections may still be missing from the knowledge base.",
+            "Execution momentum could drop if the next step is not customer-facing."
+        ],
+        "blind_spots": [
+            "Direct proof that a buyer will pay",
+            "Measured response rate from outreach",
+            "Evidence about which niche responds fastest"
+        ],
+        "monitoring_recommendations": [
+            "Track one validation or outreach outcome each week.",
+            "Track which workflow is used most before the next milestone.",
+            "Track the strongest buyer objection and whether it changes over time."
+        ]
+    }
+    return parsed or fallback
+
+
 def build_servicenow_payload(project):
     title = project.get("title", "Income idea")
     description = project.get("description", "")
@@ -1397,6 +1583,36 @@ async def rag_advisor(data: dict):
 
     return {
         "result": generate_rag_advisor(project, knowledge_items, history_text, question)
+    }
+
+
+@app.post("/recommendation-engine")
+async def recommendation_engine(data: dict):
+    project = data.get("project", {}) or {}
+    history = data.get("history", [])
+    history_text = build_history_summary(history, limit=10)
+    analytics_summary = data.get("analytics_summary", {}) or {}
+
+    if not isinstance(project, dict) or not project.get("title"):
+        return {"error": "Project data is required."}
+
+    return {
+        "result": generate_recommendation_engine(project, analytics_summary, history_text)
+    }
+
+
+@app.post("/project-evaluation")
+async def project_evaluation(data: dict):
+    project = data.get("project", {}) or {}
+    history = data.get("history", [])
+    history_text = build_history_summary(history, limit=10)
+    analytics_summary = data.get("analytics_summary", {}) or {}
+
+    if not isinstance(project, dict) or not project.get("title"):
+        return {"error": "Project data is required."}
+
+    return {
+        "result": generate_project_evaluation(project, analytics_summary, history_text)
     }
 
 
