@@ -239,9 +239,43 @@ def is_generic_title(title):
     return any(pattern in normalized for pattern in GENERIC_TITLE_PATTERNS)
 
 
-def extract_previous_ideas(history):
+def extract_previous_ideas(history, extra_ideas=None):
     previous_titles = set()
     previous_models = set()
+
+    def add_idea(idea):
+        if not isinstance(idea, dict):
+            return
+        title = normalize_text(idea.get("title", "") or idea.get("idea_title", ""))
+        model = normalize_text(idea.get("business_model", "") or idea.get("businessModel", ""))
+        if title:
+            previous_titles.add(title)
+        if model:
+            previous_models.add(model)
+
+    def read_payload(payload):
+        if isinstance(payload, list):
+            for idea in payload:
+                add_idea(idea)
+            return
+
+        if not isinstance(payload, dict):
+            return
+
+        result_payload = payload.get("result")
+        ideas_payload = payload.get("ideas")
+
+        if isinstance(result_payload, list):
+            read_payload(result_payload)
+            return
+        if isinstance(ideas_payload, list):
+            read_payload(ideas_payload)
+            return
+        if isinstance(result_payload, dict):
+            add_idea(result_payload)
+            return
+
+        add_idea(payload)
 
     for item in history or []:
         text = item.get("text", "")
@@ -251,15 +285,9 @@ def extract_previous_ideas(history):
         except Exception:
             parsed = None
 
-        if isinstance(parsed, dict):
-            parsed = parsed.get("result", parsed.get("ideas", []))
+        read_payload(parsed)
 
-        if isinstance(parsed, list):
-            for idea in parsed:
-                if not isinstance(idea, dict):
-                    continue
-                previous_titles.add(normalize_text(idea.get("title", "")))
-                previous_models.add(normalize_text(idea.get("business_model", "")))
+    read_payload(extra_ideas or [])
 
     return previous_titles, previous_models
 
@@ -1407,8 +1435,9 @@ async def generate_income_plan(data: dict):
     idea_title = data.get("idea_title", "").strip()
     idea_description = data.get("idea_description", "").strip()
     history = data.get("history",[])
+    previous_ideas = data.get("previous_ideas", []) or []
     history_text = build_history_summary(history)
-    previous_titles, previous_models = extract_previous_ideas(history)
+    previous_titles, previous_models = extract_previous_ideas(history, previous_ideas)
     focus = plan_focus or infer_focus(interests or skills, history)
 
     if request_type == "execution_plan":
@@ -1430,13 +1459,25 @@ async def generate_income_plan(data: dict):
     if request_type == "plan" or is_plan_request(interests or skills):
         return {"result": generate_plan(focus, history_text)}
 
-    max_attempts = 3
+    max_attempts = 4
     attempt = 0
     ideas = []
+    attempt_banned_titles = set(previous_titles)
+    attempt_banned_models = set(previous_models)
 
     while attempt < max_attempts:
 
-        raw = generate_ideas(focus, history_text, previous_titles, previous_models)
+        raw = generate_ideas(focus, history_text, attempt_banned_titles, attempt_banned_models)
+
+        for idea in raw:
+            if not isinstance(idea, dict):
+                continue
+            title_key = normalize_text(idea.get("title", ""))
+            model_key = normalize_text(idea.get("business_model", ""))
+            if title_key:
+                attempt_banned_titles.add(title_key)
+            if model_key:
+                attempt_banned_models.add(model_key)
 
         # 🔥 ENFORCEMENT PIPELINE
         filtered = hard_filter(raw)
@@ -1452,7 +1493,7 @@ async def generate_income_plan(data: dict):
 
     # 🚨 FINAL FALLBACK (guaranteed output)
     if len(ideas) < 3:
-        ideas = build_fallback_ideas(focus, previous_titles)
+        ideas = build_fallback_ideas(focus, attempt_banned_titles)
 
     # best option
     best = max(ideas, key=lambda x: x.get("score", 0))
