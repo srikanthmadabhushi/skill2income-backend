@@ -92,6 +92,39 @@ def build_history_summary(history, limit=6):
     return "\n".join(trimmed[-limit:])
 
 
+def compact_json_snippet(value, limit=1800):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        compact = " ".join(value.split())
+    else:
+        try:
+            compact = json.dumps(value, ensure_ascii=True)
+        except Exception:
+            compact = str(value)
+        compact = " ".join(compact.split())
+    if len(compact) > limit:
+        compact = compact[:limit] + "..."
+    return compact
+
+
+def build_rerun_instruction(workflow_name, rerun_count=0, previous_result=None, freshness_goal=""):
+    rerun_count = int(rerun_count or 0)
+    if rerun_count <= 0 and not previous_result:
+        return ""
+
+    previous_summary = compact_json_snippet(previous_result) or "No prior result summary was provided."
+    freshness_line = freshness_goal.strip() or "Bring a fresh angle, different emphasis, and updated practical steps."
+    return f"""
+RERUN CONTEXT:
+- This {workflow_name} has already been run for the same project or idea.
+- Keep the same core facts, but do NOT repeat the same phrasing, same ordered bullets, or same recommendation framing.
+- {freshness_line}
+- Prior result summary to avoid repeating:
+{previous_summary}
+"""
+
+
 STOPWORDS = {
     "the", "and", "for", "with", "that", "this", "from", "into", "your", "have", "will",
     "about", "what", "when", "where", "which", "their", "there", "then", "them", "been",
@@ -349,15 +382,19 @@ def remove_repeats(ideas, previous_titles):
     return unique
 
 
-def build_fallback_ideas(skills, previous_titles):
+def build_fallback_ideas(skills, previous_titles, batch_offset=0):
     ideas = []
     category_order = [("SaaS", 80, "Medium"), ("Automation", 75, "Low"), ("Product", 78, "Low")]
 
-    for business_model, score, risk_level in category_order:
+    for category_index, (business_model, score, risk_level) in enumerate(category_order):
         options = FALLBACK_PATTERNS[business_model][:]
-        random.shuffle(options)
+        if not options:
+            continue
 
-        for suffix, description in options:
+        start_index = (batch_offset + category_index) % len(options)
+        ordered_options = options[start_index:] + options[:start_index]
+
+        for suffix, description in ordered_options:
             title = f"{skills} {suffix}"
             if normalize_text(title) in previous_titles:
                 continue
@@ -402,9 +439,14 @@ def is_valid(ideas):
 # AI CALL
 # =========================
 
-def generate_ideas(skills, history_text, banned_titles, banned_models):
+def generate_ideas(skills, history_text, banned_titles, banned_models, repeat_count=0):
     banned_titles_text = ", ".join(sorted(banned_titles)) or "none"
     banned_models_text = ", ".join(sorted(banned_models)) or "none"
+    variation_instruction = (
+        f"This is batch #{repeat_count + 1} for the same topic. Make this batch clearly different from earlier ones."
+        if repeat_count > 0
+        else "Generate the first batch for this topic."
+    )
 
     prompt = f"""
 You are a startup strategist.
@@ -415,6 +457,7 @@ Skills: {skills}
 Context: {history_text}
 Previously returned titles to avoid: {banned_titles_text}
 Previously used business models to avoid reusing too heavily: {banned_models_text}
+Variation instruction: {variation_instruction}
 
 STRICT:
 - Avoid freelancing, courses, blogs
@@ -583,7 +626,13 @@ STRICT:
     }
 
 
-def generate_launch_agent_plan(idea_title, idea_description, history_text):
+def generate_launch_agent_plan(idea_title, idea_description, history_text, rerun_count=0, previous_result=None):
+    rerun_instruction = build_rerun_instruction(
+        "Launch Agent",
+        rerun_count,
+        previous_result,
+        "Keep the same project direction, but shift the target angle, positioning emphasis, and daily launch wording."
+    )
     prompt = f"""
 You are a launch agent for early-stage income ideas.
 
@@ -593,6 +642,8 @@ Description: {idea_description}
 
 Conversation context:
 {history_text}
+
+{rerun_instruction}
 
 STRICT:
 - Return JSON OBJECT
@@ -638,7 +689,13 @@ STRICT:
     }
 
 
-def generate_validation_toolkit(idea_title, idea_description, history_text):
+def generate_validation_toolkit(idea_title, idea_description, history_text, rerun_count=0, previous_result=None):
+    rerun_instruction = build_rerun_instruction(
+        "Validation Toolkit",
+        rerun_count,
+        previous_result,
+        "Keep the same project context, but surface a different validation angle, different questions, and different risk emphasis where possible."
+    )
     prompt = f"""
 You are a startup validation advisor.
 
@@ -648,6 +705,8 @@ Description: {idea_description}
 
 Conversation context:
 {history_text}
+
+{rerun_instruction}
 
 STRICT:
 - Return JSON OBJECT
@@ -721,7 +780,13 @@ STRICT:
     }
 
 
-def generate_first_customer_pack(idea_title, idea_description, history_text):
+def generate_first_customer_pack(idea_title, idea_description, history_text, rerun_count=0, previous_result=None):
+    rerun_instruction = build_rerun_instruction(
+        "First Customer Pack",
+        rerun_count,
+        previous_result,
+        "Keep the same project context, but vary the buyer hook, offer framing, and outreach wording so it does not read like the same pack again."
+    )
     prompt = f"""
 You are a practical go-to-market advisor.
 
@@ -731,6 +796,8 @@ Description: {idea_description}
 
 Conversation context:
 {history_text}
+
+{rerun_instruction}
 
 STRICT:
 - Return JSON OBJECT
@@ -850,7 +917,7 @@ STRICT:
     }
 
 
-def generate_project_strategy_agent(project, history_text):
+def generate_project_strategy_agent(project, history_text, rerun_count=0, previous_result=None):
     compact_project = {
         "title": project.get("title", ""),
         "description": project.get("description", ""),
@@ -872,6 +939,8 @@ Project context:
 
 Conversation context:
 {history_text}
+
+{build_rerun_instruction("Project Strategy Agent", rerun_count, previous_result, "Keep the diagnosis aligned to the same facts, but refresh the bottleneck framing, action queue emphasis, and follow-up questions.")}
 
 STRICT:
 - Return JSON OBJECT
@@ -961,7 +1030,7 @@ STRICT:
     }
 
 
-def generate_rag_advisor(project, knowledge_items, history_text, question):
+def generate_rag_advisor(project, knowledge_items, history_text, question, rerun_count=0, previous_result=None):
     compact_project = {
         "title": project.get("title", ""),
         "description": project.get("description", ""),
@@ -1011,6 +1080,8 @@ Project context:
 
 Conversation context:
 {history_text}
+
+{build_rerun_instruction("Knowledge Advisor", rerun_count, previous_result, "Stay grounded in the same cited notes, but answer from a fresh perspective and avoid repeating the same recommended actions in the same order.")}
 
 User question:
 {question}
@@ -1064,7 +1135,7 @@ STRICT:
     return parsed
 
 
-def generate_recommendation_engine(project, analytics_summary, history_text):
+def generate_recommendation_engine(project, analytics_summary, history_text, rerun_count=0, previous_result=None):
     progress = project.get("progress", {}) or {}
     linked_tickets = project.get("support_tickets", []) or []
     validation_score = (((project.get("validation_toolkit") or {}).get("validation_score") or {}).get("score")) or 0
@@ -1125,6 +1196,37 @@ def generate_recommendation_engine(project, analytics_summary, history_text):
     if not blockers:
         blockers.append("Main blocker is consistency: the project needs repeated customer-facing action this week.")
 
+    focus_rotation = [
+        {
+            "focus": "customer evidence",
+            "workflow": "Validation Toolkit",
+            "reason": "Pressure-test the buyer pain and proof signals so the next move is backed by real evidence.",
+            "blocker": "Customer evidence is still too thin to confidently prioritize the next move."
+        },
+        {
+            "focus": "knowledge depth",
+            "workflow": "Knowledge Advisor",
+            "reason": "Use your saved notes to tighten the next step around internal constraints and real user observations.",
+            "blocker": "The project still needs more grounded internal context before the next workflow is fully reliable."
+        },
+        {
+            "focus": "offer clarity",
+            "workflow": "Launch Agent",
+            "reason": "Sharpen the offer and target angle so the next customer-facing step feels more concrete.",
+            "blocker": "Offer positioning still needs more clarity before outreach can feel compelling."
+        },
+        {
+            "focus": "outreach speed",
+            "workflow": "First Customer Pack",
+            "reason": "Convert the current project state into ready-to-send outreach assets so momentum turns into conversations.",
+            "blocker": "Execution is slowing because the project still lacks fast customer-facing outreach motion."
+        }
+    ]
+    rerun_focus = focus_rotation[rerun_count % len(focus_rotation)] if rerun_count > 0 else None
+    if rerun_focus:
+        next_best_action = f"{next_best_action} This pass, focus especially on {rerun_focus['focus']}."
+        blockers = [rerun_focus["blocker"]] + [item for item in blockers if item != rerun_focus["blocker"]]
+
     top_recommendations = [
         {
             "workflow": recommended_workflow,
@@ -1142,6 +1244,17 @@ def generate_recommendation_engine(project, analytics_summary, history_text):
             "confidence": 6
         }
     ]
+    if rerun_focus:
+        top_recommendations[1] = {
+            "workflow": rerun_focus["workflow"],
+            "reason": rerun_focus["reason"],
+            "confidence": 7
+        }
+        top_recommendations[2] = {
+            "workflow": "Project Timeline Review" if rerun_focus["workflow"] != "Project Timeline Review" else "AI Coach",
+            "reason": f"Review the latest project signals with a fresh lens on {rerun_focus['focus']} before choosing the next experiment.",
+            "confidence": 6
+        }
 
     return {
         "readiness_score": readiness_score,
@@ -1163,7 +1276,7 @@ def generate_recommendation_engine(project, analytics_summary, history_text):
     }
 
 
-def generate_project_evaluation(project, analytics_summary, history_text):
+def generate_project_evaluation(project, analytics_summary, history_text, rerun_count=0, previous_result=None):
     compact_project = {
         "title": project.get("title", ""),
         "description": project.get("description", ""),
@@ -1190,6 +1303,8 @@ Analytics summary:
 
 Conversation context:
 {history_text}
+
+{build_rerun_instruction("Project Evaluation", rerun_count, previous_result, "Keep the same evidence base, but vary the evaluation lens, blind-spot emphasis, and monitoring recommendations.")}
 
 STRICT:
 - Return JSON OBJECT only
@@ -1439,18 +1554,27 @@ async def generate_income_plan(data: dict):
     history_text = build_history_summary(history)
     previous_titles, previous_models = extract_previous_ideas(history, previous_ideas)
     focus = plan_focus or infer_focus(interests or skills, history)
+    normalized_request = normalize_text(interests or skills)
+    repeat_count = sum(
+        1
+        for message in get_user_messages(history)
+        if normalize_text(message) == normalized_request
+    )
+
+    rerun_count = int(data.get("rerun_count", 0) or 0)
+    previous_result = data.get("previous_result")
 
     if request_type == "execution_plan":
         return {"result": generate_execution_plan(idea_title or focus, idea_description, history_text)}
 
     if request_type == "launch_agent":
-        return {"result": generate_launch_agent_plan(idea_title or focus, idea_description, history_text)}
+        return {"result": generate_launch_agent_plan(idea_title or focus, idea_description, history_text, rerun_count=rerun_count, previous_result=previous_result)}
 
     if request_type == "validation_toolkit":
-        return {"result": generate_validation_toolkit(idea_title or focus, idea_description, history_text)}
+        return {"result": generate_validation_toolkit(idea_title or focus, idea_description, history_text, rerun_count=rerun_count, previous_result=previous_result)}
 
     if request_type == "first_customer_pack":
-        return {"result": generate_first_customer_pack(idea_title or focus, idea_description, history_text)}
+        return {"result": generate_first_customer_pack(idea_title or focus, idea_description, history_text, rerun_count=rerun_count, previous_result=previous_result)}
 
     if request_type == "idea_comparison":
         ideas_to_compare = data.get("ideas", []) or []
@@ -1467,7 +1591,13 @@ async def generate_income_plan(data: dict):
 
     while attempt < max_attempts:
 
-        raw = generate_ideas(focus, history_text, attempt_banned_titles, attempt_banned_models)
+        raw = generate_ideas(
+            focus,
+            history_text,
+            attempt_banned_titles,
+            attempt_banned_models,
+            repeat_count=repeat_count + attempt
+        )
 
         for idea in raw:
             if not isinstance(idea, dict):
@@ -1493,7 +1623,7 @@ async def generate_income_plan(data: dict):
 
     # 🚨 FINAL FALLBACK (guaranteed output)
     if len(ideas) < 3:
-        ideas = build_fallback_ideas(focus, attempt_banned_titles)
+        ideas = build_fallback_ideas(focus, attempt_banned_titles, batch_offset=repeat_count)
 
     # best option
     best = max(ideas, key=lambda x: x.get("score", 0))
@@ -1544,12 +1674,16 @@ async def launch_agent(data: dict):
     idea_description = data.get("idea_description", "").strip()
     history = data.get("history", [])
     history_text = build_history_summary(history, limit=10)
+    rerun_count = int(data.get("rerun_count", 0) or 0)
+    previous_result = data.get("previous_result")
 
     return {
         "result": generate_launch_agent_plan(
             idea_title=idea_title or "the selected idea",
             idea_description=idea_description,
-            history_text=history_text
+            history_text=history_text,
+            rerun_count=rerun_count,
+            previous_result=previous_result
         )
     }
 
@@ -1560,12 +1694,16 @@ async def validation_toolkit(data: dict):
     idea_description = data.get("idea_description", "").strip()
     history = data.get("history", [])
     history_text = build_history_summary(history, limit=10)
+    rerun_count = int(data.get("rerun_count", 0) or 0)
+    previous_result = data.get("previous_result")
 
     return {
         "result": generate_validation_toolkit(
             idea_title=idea_title or "the selected idea",
             idea_description=idea_description,
-            history_text=history_text
+            history_text=history_text,
+            rerun_count=rerun_count,
+            previous_result=previous_result
         )
     }
 
@@ -1576,12 +1714,16 @@ async def first_customer_pack(data: dict):
     idea_description = data.get("idea_description", "").strip()
     history = data.get("history", [])
     history_text = build_history_summary(history, limit=10)
+    rerun_count = int(data.get("rerun_count", 0) or 0)
+    previous_result = data.get("previous_result")
 
     return {
         "result": generate_first_customer_pack(
             idea_title=idea_title or "the selected idea",
             idea_description=idea_description,
-            history_text=history_text
+            history_text=history_text,
+            rerun_count=rerun_count,
+            previous_result=previous_result
         )
     }
 
@@ -1602,12 +1744,14 @@ async def project_strategy_agent(data: dict):
     project = data.get("project", {}) or {}
     history = data.get("history", [])
     history_text = build_history_summary(history, limit=10)
+    rerun_count = int(data.get("rerun_count", 0) or 0)
+    previous_result = data.get("previous_result")
 
     if not isinstance(project, dict) or not project.get("title"):
         return {"error": "Project data is required."}
 
     return {
-        "result": generate_project_strategy_agent(project, history_text)
+        "result": generate_project_strategy_agent(project, history_text, rerun_count=rerun_count, previous_result=previous_result)
     }
 
 
@@ -1618,12 +1762,14 @@ async def rag_advisor(data: dict):
     history_text = build_history_summary(history, limit=10)
     question = (data.get("question") or "").strip() or "What should I do next based on my saved knowledge notes?"
     knowledge_items = [item for item in (data.get("knowledge_items", []) or []) if isinstance(item, dict)]
+    rerun_count = int(data.get("rerun_count", 0) or 0)
+    previous_result = data.get("previous_result")
 
     if not isinstance(project, dict) or not project.get("title"):
         return {"error": "Project data is required."}
 
     return {
-        "result": generate_rag_advisor(project, knowledge_items, history_text, question)
+        "result": generate_rag_advisor(project, knowledge_items, history_text, question, rerun_count=rerun_count, previous_result=previous_result)
     }
 
 
@@ -1633,12 +1779,14 @@ async def recommendation_engine(data: dict):
     history = data.get("history", [])
     history_text = build_history_summary(history, limit=10)
     analytics_summary = data.get("analytics_summary", {}) or {}
+    rerun_count = int(data.get("rerun_count", 0) or 0)
+    previous_result = data.get("previous_result")
 
     if not isinstance(project, dict) or not project.get("title"):
         return {"error": "Project data is required."}
 
     return {
-        "result": generate_recommendation_engine(project, analytics_summary, history_text)
+        "result": generate_recommendation_engine(project, analytics_summary, history_text, rerun_count=rerun_count, previous_result=previous_result)
     }
 
 
@@ -1648,12 +1796,14 @@ async def project_evaluation(data: dict):
     history = data.get("history", [])
     history_text = build_history_summary(history, limit=10)
     analytics_summary = data.get("analytics_summary", {}) or {}
+    rerun_count = int(data.get("rerun_count", 0) or 0)
+    previous_result = data.get("previous_result")
 
     if not isinstance(project, dict) or not project.get("title"):
         return {"error": "Project data is required."}
 
     return {
-        "result": generate_project_evaluation(project, analytics_summary, history_text)
+        "result": generate_project_evaluation(project, analytics_summary, history_text, rerun_count=rerun_count, previous_result=previous_result)
     }
 
 
