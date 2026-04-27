@@ -668,15 +668,43 @@ STRICT:
     if parsed is not None:
         return parsed
 
-    return {
-        "niche": f"Small teams that need {idea_title} to solve one repeated workflow problem faster.",
-        "first_offer": f"Offer a focused pilot of {idea_title} for one niche customer with setup and feedback support included.",
-        "landing_page_copy": {
+    launch_angles = [
+        {
+            "niche": f"Small teams that need {idea_title} to solve one repeated workflow problem faster.",
+            "first_offer": f"Offer a focused pilot of {idea_title} for one niche customer with setup and feedback support included.",
             "headline": f"Launch {idea_title} without the usual delay",
             "subheadline": "A focused solution for teams that need a simpler way to handle this workflow and get results quickly.",
-            "cta": "Book an early access demo"
+            "cta": "Book an early access demo",
+            "outreach": f"Hi [Name], I am building {idea_title} for teams dealing with this workflow pain every week. I can show a simple pilot version and would love 15 minutes of feedback if this is relevant to your team."
         },
-        "outreach_message": f"Hi [Name], I am building {idea_title} for teams dealing with this workflow pain every week. I can show a simple pilot version and would love 15 minutes of feedback if this is relevant to your team.",
+        {
+            "niche": f"Niche operators who need {idea_title} to reduce manual back-and-forth in one high-friction process.",
+            "first_offer": f"Run a fast-start implementation of {idea_title} for one narrow use case and measure the before-and-after time saved.",
+            "headline": f"Turn {idea_title} into a fast pilot for one painful workflow",
+            "subheadline": "Built for a narrow team that wants a lightweight first version before committing to a larger rollout.",
+            "cta": "Request a pilot walkthrough",
+            "outreach": f"Hi [Name], I am testing {idea_title} with a very narrow use case so teams can cut manual effort quickly. If this workflow is painful on your side, I would love to show a short pilot concept and get your reaction."
+        },
+        {
+            "niche": f"Teams under delivery pressure that need {idea_title} to simplify one repeated internal operation.",
+            "first_offer": f"Package {idea_title} as a short fixed-scope launch sprint with one measurable workflow outcome.",
+            "headline": f"Use {idea_title} to simplify one high-friction workflow first",
+            "subheadline": "Start with one measurable outcome, one narrow workflow, and one team that feels the pain most often.",
+            "cta": "See the 7-day launch sprint",
+            "outreach": f"Hi [Name], I am shaping {idea_title} into a fixed-scope launch sprint for teams that keep hitting the same workflow bottleneck. If that sounds relevant, I can share the concept and get your feedback in 15 minutes."
+        }
+    ]
+    launch_angle = launch_angles[rerun_count % len(launch_angles)]
+
+    return {
+        "niche": launch_angle["niche"],
+        "first_offer": launch_angle["first_offer"],
+        "landing_page_copy": {
+            "headline": launch_angle["headline"],
+            "subheadline": launch_angle["subheadline"],
+            "cta": launch_angle["cta"]
+        },
+        "outreach_message": launch_angle["outreach"],
         "seven_day_plan": [
             "Day 1: Pick one narrow niche and define the one painful workflow you will solve.",
             "Day 2: Write the offer promise, target outcome, and starter pricing.",
@@ -737,31 +765,99 @@ STRICT:
     if parsed is not None:
         return parsed
 
+    validation_variants = [
+        {
+            "summary": f"{idea_title} looks strongest when positioned for one narrow customer with a repeated pain that already costs time or money. Validate urgency first before expanding the offer.",
+            "customer": f"A niche buyer who repeatedly faces the problem solved by {idea_title} and wants a faster, simpler outcome.",
+            "pains": [
+                "How often the target user faces this problem each week.",
+                "What the current workaround costs in time, money, or frustration.",
+                "Whether the user would pay for a simpler result instead of continuing with the current process."
+            ],
+            "competitors": [
+                "Some users may already patch this problem with manual spreadsheets or general-purpose tools.",
+                "The main competition may be a service provider or in-house workaround rather than a direct software product.",
+                "The best positioning angle is usually speed, simplicity, or niche-specific results."
+            ],
+            "questions": [
+                "How are you solving this problem today?",
+                "What is the most frustrating part of the current workflow?",
+                "How often does this issue happen in a normal week?",
+                "What would a good solution need to do to feel worth paying for?",
+                "Would you try a pilot if it solved this in a simpler way?"
+            ],
+            "actions": [
+                "Talk to 5 target users in one narrow niche.",
+                "Test one simple offer statement and see which pain point gets the strongest reaction.",
+                "Use the feedback to tighten the niche before building more features."
+            ]
+        },
+        {
+            "summary": f"{idea_title} has potential if you can prove that the pain is urgent enough to trigger action, not just interest. Focus this round on willingness-to-buy signals instead of feature ideas.",
+            "customer": f"A narrowly defined operator or manager who feels this workflow pain repeatedly and would pay to reduce delays.",
+            "pains": [
+                "Which part of the workflow creates the most repeated delay.",
+                "How much team time gets lost because the current method is clunky.",
+                "Whether buyers already budget for adjacent tools, services, or manual fixes."
+            ],
+            "competitors": [
+                "The real competitor may be a no-decision outcome where teams keep tolerating the pain.",
+                "Adjacent tools may partially solve the issue but not for this exact niche workflow.",
+                "Niche-specific positioning can be more powerful than broad product claims."
+            ],
+            "questions": [
+                "What happens if this problem is not solved in the next month?",
+                "What do you currently do when this issue shows up?",
+                "Who feels the frustration most directly when the workflow slows down?",
+                "What result would make a paid pilot feel justified?",
+                "If I solved only this one pain point, would you test it?"
+            ],
+            "actions": [
+                "Ask 5 prospects what the cost of inaction looks like.",
+                "Test a price-framed pilot message instead of a feature-heavy message.",
+                "Write down the exact words buyers use when describing urgency."
+            ]
+        },
+        {
+            "summary": f"{idea_title} should be validated around one measurable outcome, not a broad promise. This pass should focus on proving that one outcome matters enough to win a first buyer conversation.",
+            "customer": f"A focused team lead or specialist who needs a clear, measurable improvement from {idea_title}.",
+            "pains": [
+                "What measurable outcome the customer actually wants improved first.",
+                "Whether the workflow pain is visible enough to get internal approval quickly.",
+                "What objections appear when buyers compare this idea to doing nothing."
+            ],
+            "competitors": [
+                "Buyers may compare this idea against internal process changes instead of direct products.",
+                "Simple service-based alternatives can be stronger competitors than software at first.",
+                "Outcome-based messaging can outperform tool-based messaging in early validation."
+            ],
+            "questions": [
+                "What single result would make this worth testing first?",
+                "How do you currently measure success in this workflow?",
+                "What would stop you from trying a pilot even if the idea sounds useful?",
+                "Would a fixed-scope pilot feel easier to approve than a full solution?",
+                "Who else would need to agree before this could be tried?"
+            ],
+            "actions": [
+                "Frame the idea around one measurable before-and-after result.",
+                "Test a fixed-scope pilot offer with a clear outcome promise.",
+                "Collect objections and group them into pricing, trust, or workflow-fit themes."
+            ]
+        }
+    ]
+    validation_variant = validation_variants[rerun_count % len(validation_variants)]
+
     return {
-        "validation_summary": f"{idea_title} looks strongest when positioned for one narrow customer with a repeated pain that already costs time or money. Validate urgency first before expanding the offer.",
+        "validation_summary": validation_variant["summary"],
         "validation_score": {
             "label": "Yellow",
             "score": 7,
             "reason": "The direction is promising, but demand needs proof from real customer conversations."
         },
-        "target_customer": f"A niche buyer who repeatedly faces the problem solved by {idea_title} and wants a faster, simpler outcome.",
-        "pains_to_confirm": [
-            "How often the target user faces this problem each week.",
-            "What the current workaround costs in time, money, or frustration.",
-            "Whether the user would pay for a simpler result instead of continuing with the current process."
-        ],
-        "competitor_snapshot": [
-            "Some users may already patch this problem with manual spreadsheets or general-purpose tools.",
-            "The main competition may be a service provider or in-house workaround rather than a direct software product.",
-            "The best positioning angle is usually speed, simplicity, or niche-specific results."
-        ],
-        "outreach_questions": [
-            "How are you solving this problem today?",
-            "What is the most frustrating part of the current workflow?",
-            "How often does this issue happen in a normal week?",
-            "What would a good solution need to do to feel worth paying for?",
-            "Would you try a pilot if it solved this in a simpler way?"
-        ],
+        "target_customer": validation_variant["customer"],
+        "pains_to_confirm": validation_variant["pains"],
+        "competitor_snapshot": validation_variant["competitors"],
+        "outreach_questions": validation_variant["questions"],
         "green_flags": [
             "People describe the same pain point in similar words.",
             "Users already spend time or money on a workaround.",
@@ -772,11 +868,7 @@ STRICT:
             "Users say they rarely face the issue.",
             "People like the idea but avoid committing to a pilot or next conversation."
         ],
-        "next_actions": [
-            "Talk to 5 target users in one narrow niche.",
-            "Test one simple offer statement and see which pain point gets the strongest reaction.",
-            "Use the feedback to tighten the niche before building more features."
-        ]
+        "next_actions": validation_variant["actions"]
     }
 
 
@@ -824,8 +916,24 @@ STRICT:
     if parsed is not None:
         return parsed
 
+    pack_angles = [
+        {
+            "positioning": f"{idea_title} should be positioned as a focused solution for a narrow buyer who already feels this pain each week and wants faster results without extra complexity.",
+            "cta": "Send the cold email or LinkedIn DM to 5 target prospects and book 2 short discovery conversations this week."
+        },
+        {
+            "positioning": f"{idea_title} works best when framed as a narrow pilot for one measurable outcome, not a broad platform promise.",
+            "cta": "Send a pilot-focused message to 5 prospects and ask for one short feedback call plus one objection."
+        },
+        {
+            "positioning": f"{idea_title} should be sold as a fixed-scope first offer for buyers who want a simpler workflow before committing to a larger change.",
+            "cta": "Test the offer with 5 buyers, compare responses, and rewrite the message based on the strongest reply pattern."
+        }
+    ]
+    pack_angle = pack_angles[rerun_count % len(pack_angles)]
+
     return {
-        "positioning": f"{idea_title} should be positioned as a focused solution for a narrow buyer who already feels this pain each week and wants faster results without extra complexity.",
+        "positioning": pack_angle["positioning"],
         "cold_email": f"Subject: Quick idea for improving [pain point]\n\nHi [Name], I am building {idea_title} for teams that deal with this workflow repeatedly. I put together a simple approach that could remove a lot of manual effort around [specific pain point]. Would you be open to a short 15-minute call this week so I can show you the concept and get your feedback?",
         "linkedin_dm": f"Hi [Name], I am testing {idea_title} for teams dealing with [specific pain point]. I would love to show you a quick concept and hear whether this would be useful for your workflow.",
         "whatsapp_pitch": f"Hi [Name], I am building {idea_title} to help teams handle this workflow faster. I have a simple early version and would love to get your feedback if this problem comes up often for you.",
@@ -847,7 +955,7 @@ STRICT:
                 "Built around real buyer feedback before scaling features"
             ]
         },
-        "call_to_action": "Send the cold email or LinkedIn DM to 5 target prospects and book 2 short discovery conversations this week."
+        "call_to_action": pack_angle["cta"]
     }
 
 
@@ -972,12 +1080,18 @@ STRICT:
     if parsed is not None:
         return parsed
 
+    strategy_focus = [
+        "buyer validation before feature expansion",
+        "offer clarity before scaling the workflow",
+        "customer conversations before deeper build effort"
+    ][rerun_count % 3]
+
     return {
         "diagnosis": {
             "stage": "Validation",
             "bottleneck": "No confirmed buyer signal yet",
             "confidence": 7,
-            "reason": "The project has direction, but the next highest-value move is still proving that a specific buyer wants this outcome."
+            "reason": f"The project has direction, but the next highest-value move is still {strategy_focus}."
         },
         "next_best_action": "Send one focused offer message to 5 target buyers and ask for a short feedback call this week.",
         "action_queue": [
@@ -1325,42 +1439,112 @@ STRICT:
         user_prompt=prompt,
         fallback=None,
         expected_type="dict",
-        temperature=0.35,
+        temperature=0.6,
         max_tokens=1100,
         attempts=2
     )
+    evaluation_variants = [
+        {
+            "summary": "The project has useful execution structure, but it still needs stronger proof that users will engage and pay. Observability is improving, though customer evidence is still the weakest area.",
+            "reason": "The workspace has multiple useful outputs, but customer evidence and monitoring still need to mature.",
+            "evidence": [
+                "Project structure and workflow outputs are present.",
+                "Customer validation evidence is only partially covered.",
+                "Operational notes and timeline data exist but are still light."
+            ],
+            "checks": [
+                "Pass: Project has a clear title, goal, and reusable workspace state.",
+                "Caution: Validation and launch artifacts may not yet align with actual buyer feedback.",
+                "Caution: Monitoring signals are present, but they are not yet rich enough for confident prioritization."
+            ],
+            "risks": [
+                "The project may be overbuilt before demand is proven.",
+                "Important buyer objections may still be missing from the knowledge base.",
+                "Execution momentum could drop if the next step is not customer-facing."
+            ],
+            "blind_spots": [
+                "Direct proof that a buyer will pay",
+                "Measured response rate from outreach",
+                "Evidence about which niche responds fastest"
+            ],
+            "monitoring": [
+                "Track one validation or outreach outcome each week.",
+                "Track which workflow is used most before the next milestone.",
+                "Track the strongest buyer objection and whether it changes over time."
+            ]
+        },
+        {
+            "summary": "The project has a solid workflow foundation, but the strongest missing layer is commercial proof. Monitoring should now focus more on buyer response patterns than on generating more internal artifacts.",
+            "reason": "Execution assets exist, but revenue-facing evidence is still the weakest system signal.",
+            "evidence": [
+                "There is enough project structure to support the next experiment.",
+                "Buyer evidence is still lighter than execution evidence.",
+                "Analytics signals exist, but they need tighter decision use."
+            ],
+            "checks": [
+                "Pass: The workspace is organized enough to support repeat workflows.",
+                "Caution: The project may still be optimizing internal clarity over external proof.",
+                "Caution: Recommendations and validations may not yet reflect live buyer response."
+            ],
+            "risks": [
+                "The offer could stay interesting but not urgent.",
+                "Monitoring may emphasize activity more than conversion signals.",
+                "The team could mistake content generation for real validation progress."
+            ],
+            "blind_spots": [
+                "Which message actually gets replies",
+                "What buyer objection shows up most often",
+                "Which outcome feels urgent enough to pay for first"
+            ],
+            "monitoring": [
+                "Track reply rate by outreach message angle.",
+                "Track which objections repeat across customer conversations.",
+                "Track whether each new artifact leads to a real buyer-facing action."
+            ]
+        },
+        {
+            "summary": "The project is becoming more structured, but its quality now depends on whether all generated outputs converge on one clear buyer story. Observability should emphasize consistency between validation, offer, and next-step execution.",
+            "reason": "The project has momentum, but cross-workflow consistency still needs tighter review.",
+            "evidence": [
+                "Several useful outputs already exist across the workspace.",
+                "The buyer story may still vary from one workflow result to another.",
+                "Timeline signals show activity, but not yet enough consistency proof."
+            ],
+            "checks": [
+                "Pass: The project has enough outputs to compare signals across workflows.",
+                "Caution: Positioning, validation, and outreach may not yet point to the same buyer promise.",
+                "Caution: Monitoring still needs stronger links between activity and outcomes."
+            ],
+            "risks": [
+                "Different workflows may be optimizing for slightly different target buyers.",
+                "The project may drift into mixed messaging without a single outcome anchor.",
+                "Execution quality may drop if monitoring does not flag inconsistencies early."
+            ],
+            "blind_spots": [
+                "Whether the same buyer problem appears across all outputs",
+                "Which workflow result is most actionable in practice",
+                "What success metric defines the next milestone clearly"
+            ],
+            "monitoring": [
+                "Track whether all core outputs point to the same buyer and pain point.",
+                "Track which workflow result leads to the clearest next action.",
+                "Track one success metric for the next milestone and review it weekly."
+            ]
+        }
+    ]
+    evaluation_variant = evaluation_variants[rerun_count % len(evaluation_variants)]
     fallback = {
-        "evaluation_summary": "The project has useful execution structure, but it still needs stronger proof that users will engage and pay. Observability is improving, though customer evidence is still the weakest area.",
+        "evaluation_summary": evaluation_variant["summary"],
         "output_quality_score": {
             "score": 7,
             "label": "Moderate",
-            "reason": "The workspace has multiple useful outputs, but customer evidence and monitoring still need to mature."
+            "reason": evaluation_variant["reason"]
         },
-        "evidence_coverage": [
-            "Project structure and workflow outputs are present.",
-            "Customer validation evidence is only partially covered.",
-            "Operational notes and timeline data exist but are still light."
-        ],
-        "consistency_checks": [
-            "Pass: Project has a clear title, goal, and reusable workspace state.",
-            "Caution: Validation and launch artifacts may not yet align with actual buyer feedback.",
-            "Caution: Monitoring signals are present, but they are not yet rich enough for confident prioritization."
-        ],
-        "risk_flags": [
-            "The project may be overbuilt before demand is proven.",
-            "Important buyer objections may still be missing from the knowledge base.",
-            "Execution momentum could drop if the next step is not customer-facing."
-        ],
-        "blind_spots": [
-            "Direct proof that a buyer will pay",
-            "Measured response rate from outreach",
-            "Evidence about which niche responds fastest"
-        ],
-        "monitoring_recommendations": [
-            "Track one validation or outreach outcome each week.",
-            "Track which workflow is used most before the next milestone.",
-            "Track the strongest buyer objection and whether it changes over time."
-        ]
+        "evidence_coverage": evaluation_variant["evidence"],
+        "consistency_checks": evaluation_variant["checks"],
+        "risk_flags": evaluation_variant["risks"],
+        "blind_spots": evaluation_variant["blind_spots"],
+        "monitoring_recommendations": evaluation_variant["monitoring"]
     }
     return parsed or fallback
 
